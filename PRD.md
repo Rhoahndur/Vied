@@ -1,4 +1,4 @@
-# ClipForge MVP - Product Requirements Document
+# Vied MVP - Product Requirements Document
 
 **Version:** 1.0  
 **Deadline:** Tuesday, October 28th, 10:59 PM CT  
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-ClipForge MVP is a minimal desktop video editor that proves core media handling capabilities. The MVP demonstrates you can import video files, display them in a timeline interface, perform basic trimming, and export the result as an MP4 file.
+Vied MVP is a minimal desktop video editor that proves core media handling capabilities. The MVP demonstrates you can import video files, display them in a timeline interface, perform basic trimming, and export the result as an MP4 file.
 
 **Success Criteria:** A packaged desktop application that can import, trim, and export a single video clip.
 
@@ -226,7 +226,7 @@ ClipForge MVP is a minimal desktop video editor that proves core media handling 
 
 ### File Structure
 ```
-clipforge/
+vied/
 ├── package.json
 ├── main.js                 (Electron main process)
 ├── preload.js             (Bridge between main and renderer)
@@ -255,8 +255,8 @@ clipforge/
 
 3. **Scaffold Electron + React Project**:
    ```bash
-   npx create-electron-app clipforge --template=webpack
-   cd clipforge
+   npx create-electron-app vied --template=webpack
+   cd vied
    npm install react react-dom
    npm install fluent-ffmpeg
    npm install electron-builder --save-dev
@@ -476,7 +476,7 @@ ipcMain.handle('export-video', async (event, { inputPath, outputPath, startTime,
     "build": "electron-builder --mac"
   },
   "build": {
-    "appId": "com.clipforge.app",
+    "appId": "com.vied.app",
     "mac": {
       "category": "public.app-category.video",
       "target": "dmg"
@@ -610,8 +610,8 @@ ffmpeg -version
 **2. Create Your Project (10 minutes)**
 ```bash
 # Create Electron app with React template
-npx create-electron-app clipforge --template=webpack
-cd clipforge
+npx create-electron-app vied --template=webpack
+cd vied
 
 # Install React and other dependencies
 npm install react react-dom
@@ -626,7 +626,7 @@ You should see a window open. That's Electron!
 
 **3. Understanding the File Structure**
 ```
-clipforge/
+vied/
 ├── src/
 │   ├── index.js       ← Main Process (Node.js, handles FFmpeg)
 │   ├── preload.js     ← Bridge between main and renderer
@@ -670,7 +670,7 @@ function App() {
 
   return (
     <div style={{ padding: '20px', fontFamily: 'system-ui' }}>
-      <h1>ClipForge MVP</h1>
+      <h1>Vied MVP</h1>
       
       <button onClick={handleImport} style={{ padding: '10px 20px', fontSize: '16px' }}>
         Import Video
@@ -738,7 +738,7 @@ ReactDOM.render(<App />, document.getElementById('root'));
 <html>
   <head>
     <meta charset="UTF-8">
-    <title>ClipForge</title>
+    <title>Vied</title>
   </head>
   <body>
     <div id="root"></div>
@@ -875,8 +875,8 @@ Add to your `package.json`:
     "build": "electron-builder --mac"
   },
   "build": {
-    "appId": "com.clipforge.app",
-    "productName": "ClipForge",
+    "appId": "com.vied.app",
+    "productName": "Vied",
     "mac": {
       "category": "public.app-category.video",
       "target": "dmg"

@@ -1,4 +1,4 @@
-# ClipForge Architecture Diagrams
+# Vied Architecture Diagrams
 
 ## System Architecture
 
@@ -464,8 +464,8 @@ flowchart TD
     end
     
     subgraph "Output"
-        DMG[ClipForge.dmg]
-        AppBundle[ClipForge.app]
+        DMG[Vied.dmg]
+        AppBundle[Vied.app]
     end
     
     Source --> DevServer

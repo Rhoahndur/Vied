@@ -1,6 +1,6 @@
-# ClipForge MVP - Task List by PR
+# Vied MVP - Task List by PR
 
-**Project:** ClipForge Desktop Video Editor  
+**Project:** Vied Desktop Video Editor  
 **MVP Deadline:** Tuesday, October 28th, 10:59 PM CT  
 **Start Date:** Monday, October 27th
 
@@ -9,7 +9,7 @@
 ## Project File Structure
 
 ```
-clipforge/
+vied/
 ├── .gitignore
 ├── package.json
 ├── package-lock.json
@@ -64,8 +64,8 @@ clipforge/
 
 - [ ] Create Electron project with React template
   ```bash
-  npx create-electron-app clipforge --template=webpack
-  cd clipforge
+  npx create-electron-app vied --template=webpack
+  cd vied
   ```
 
 - [ ] Install dependencies
@@ -104,8 +104,8 @@ clipforge/
       "build": "electron-builder --mac"
     },
     "build": {
-      "appId": "com.clipforge.app",
-      "productName": "ClipForge",
+      "appId": "com.vied.app",
+      "productName": "Vied",
       "mac": {
         "category": "public.app-category.video",
         "target": "dmg"
@@ -117,7 +117,7 @@ clipforge/
 - [ ] Create basic README
   **File:** `README.md`
   ```markdown
-  # ClipForge MVP
+  # Vied MVP
   
   Desktop video editor built with Electron + React
   
@@ -165,7 +165,7 @@ clipforge/
     return (
       <div className="app-container">
         <header className="app-header">
-          <h1>ClipForge MVP</h1>
+          <h1>Vied MVP</h1>
         </header>
         
         <main className="app-main">
@@ -206,7 +206,7 @@ clipforge/
   <html>
     <head>
       <meta charset="UTF-8">
-      <title>ClipForge MVP</title>
+      <title>Vied MVP</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
     <body>
@@ -592,7 +592,7 @@ clipforge/
     return (
       <div className="app-container">
         <header className="app-header">
-          <h1>ClipForge MVP</h1>
+          <h1>Vied MVP</h1>
         </header>
         
         <main className="app-main">
@@ -830,7 +830,7 @@ clipforge/
     return (
       <div className="app-container">
         <header className="app-header">
-          <h1>ClipForge MVP</h1>
+          <h1>Vied MVP</h1>
         </header>
         
         <main className="app-main">
@@ -1176,7 +1176,7 @@ clipforge/
     return (
       <div className="app-container">
         <header className="app-header">
-          <h1>ClipForge MVP</h1>
+          <h1>Vied MVP</h1>
         </header>
         
         <main className="app-main">
@@ -1558,7 +1558,7 @@ clipforge/
     return (
       <div className="app-container">
         <header className="app-header">
-          <h1>ClipForge MVP</h1>
+          <h1>Vied MVP</h1>
         </header>
         
         <main className="app-main">
@@ -1787,7 +1787,7 @@ clipforge/
   ipcMain.handle('save-file', async () => {
     try {
       const result = await dialog.showSaveDialog(mainWindow, {
-        defaultPath: 'clipforge-export.mp4',
+        defaultPath: 'vied-export.mp4',
         filters: [
           { name: 'Video', extensions: ['mp4'] }
         ],
@@ -1914,7 +1914,7 @@ clipforge/
     return (
       <div className="app-container">
         <header className="app-header">
-          <h1>ClipForge MVP</h1>
+          <h1>Vied MVP</h1>
         </header>
         
         <main className="app-main">
@@ -2028,8 +2028,8 @@ clipforge/
   **File:** `package.json` (MODIFY)
   ```json
   {
-    "name": "clipforge",
-    "productName": "ClipForge",
+    "name": "vied",
+    "productName": "Vied",
     "version": "1.0.0",
     "description": "Desktop video editor for trimming and exporting videos",
     "main": "src/index.js",
@@ -2042,8 +2042,8 @@ clipforge/
       "build:mac:dmg": "electron-builder --mac --dmg"
     },
     "build": {
-      "appId": "com.clipforge.app",
-      "productName": "ClipForge",
+      "appId": "com.vied.app",
+      "productName": "Vied",
       "mac": {
         "category": "public.app-category.video",
         "target": [
@@ -2067,7 +2067,7 @@ clipforge/
         }
       ],
       "dmg": {
-        "title": "ClipForge Installer",
+        "title": "Vied Installer",
         "icon": "assets/icon.icns",
         "background": "assets/dmg-background.png",
         "window": {
@@ -2121,7 +2121,7 @@ clipforge/
 - [ ] Update README with build instructions
   **File:** `README.md` (MODIFY)
   ```markdown
-  # ClipForge MVP
+  # Vied MVP
 
   Desktop video editor built with Electron + React for trimming and exporting videos.
 
@@ -2186,7 +2186,7 @@ clipforge/
   ## Project Structure
 
   ```
-  clipforge/
+  vied/
   ├── src/
   │   ├── index.js           # Main process
   │   ├── preload.js         # IPC bridge
@@ -2237,8 +2237,8 @@ clipforge/
 
 - [ ] Install .dmg on your Mac
   - Double-click the .dmg file
-  - Drag ClipForge to Applications folder
-  - Open ClipForge from Applications
+  - Drag Vied to Applications folder
+  - Open Vied from Applications
   - **Test the entire workflow:**
     1. Import video
     2. Set trim points
@@ -2402,7 +2402,7 @@ clipforge/
   **File:** `src/App.jsx` (MODIFY - add to header)
   ```javascript
   <header className="app-header">
-    <h1>ClipForge MVP</h1>
+    <h1>Vied MVP</h1>
     <span style={{ 
       fontSize: '11px', 
       color: '#666',
@@ -2424,7 +2424,7 @@ clipforge/
       fontSize: '14px'
     }}>
       <p style={{ marginBottom: '10px' }}>
-        👋 Welcome to ClipForge!
+        👋 Welcome to Vied!
       </p>
       <p>
         Click "Import Video" to get started

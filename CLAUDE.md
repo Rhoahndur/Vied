@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ClipForge is a desktop video editor MVP built with Electron + React that enables users to import video files, trim them using a visual timeline, and export the results as MP4 files. The core video processing is handled by FFmpeg.
+Vied is a desktop video editor MVP built with Electron + React that enables users to import video files, trim them using a visual timeline, and export the results as MP4 files. The core video processing is handled by FFmpeg.
 
 **Tech Stack:**
 - Electron (desktop framework)
@@ -39,7 +39,7 @@ ffmpeg -version          # Verify installation
 
 ## Architecture Overview
 
-ClipForge uses a **two-process architecture** typical of Electron applications:
+Vied uses a **two-process architecture** typical of Electron applications:
 
 ### Main Process (`src/index.js`)
 - Node.js environment with full system access
