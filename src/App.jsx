@@ -71,6 +71,10 @@ function App() {
       setStartTime(0);
       setEndTime(dur);
 
+      // Reset clips and selection when loading new video
+      setClips([]);
+      setSelectedClipId(null);
+
       // Add to recent files
       addToRecentFiles(data.path, data.metadata);
     } else {
@@ -481,16 +485,14 @@ function App() {
               onSplit={handleSplitClip}
             />
 
-            {videoPath && (
-              <ExportButton
-                videoPath={videoPath}
-                startTime={startTime}
-                endTime={endTime}
-                duration={duration}
-                clips={clips}
-                disabled={!videoPath}
-              />
-            )}
+            <ExportButton
+              videoPath={videoPath}
+              startTime={startTime}
+              endTime={endTime}
+              duration={duration}
+              clips={clips}
+              disabled={!videoPath}
+            />
           </div>
         </div>
       </main>

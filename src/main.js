@@ -149,8 +149,12 @@ ipcMain.handle('open-file', async () => {
 ipcMain.handle('save-file', async () => {
   console.log('save-file handler called');
   try {
+    // Generate a unique filename with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const defaultFilename = `vied-export-${timestamp}.mp4`;
+
     const result = await dialog.showSaveDialog(mainWindow, {
-      defaultPath: 'vied-export.mp4',
+      defaultPath: defaultFilename,
       filters: [
         { name: 'Video', extensions: ['mp4'] }
       ],
@@ -266,6 +270,11 @@ ipcMain.handle('export-video', async (event, params) => {
   console.log('export-video handler called', params);
   const { input, output, start, duration } = params;
 
+  // Safety check: prevent overwriting input file
+  if (path.resolve(input) === path.resolve(output)) {
+    throw new Error('Cannot export to the same file as the input. Please choose a different output filename.');
+  }
+
   return new Promise((resolve, reject) => {
     ffmpeg(input)
       .setStartTime(start)  // Where to start trimming (in seconds)
@@ -302,6 +311,11 @@ ipcMain.handle('export-video', async (event, params) => {
 ipcMain.handle('export-clips', async (event, params) => {
   console.log('export-clips handler called', params);
   const { input, output, clips } = params;
+
+  // Safety check: prevent overwriting input file
+  if (path.resolve(input) === path.resolve(output)) {
+    throw new Error('Cannot export to the same file as the input. Please choose a different output filename.');
+  }
 
   return new Promise(async (resolve, reject) => {
     try {
