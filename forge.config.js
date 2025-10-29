@@ -4,6 +4,12 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
+    appBundleId: 'com.vied.app',
+    extendInfo: {
+      NSCameraUsageDescription: 'Vied needs access to your camera to record webcam videos.',
+      NSMicrophoneUsageDescription: 'Vied needs access to your microphone to record audio with videos.',
+      NSScreenCaptureDescription: 'Vied needs permission to record your screen.',
+    },
   },
   rebuildConfig: {},
   makers: [

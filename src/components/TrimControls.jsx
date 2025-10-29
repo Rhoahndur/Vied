@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-function TrimControls({ currentTime, duration, startTime, endTime, onSetStart, onSetEnd, onReset }) {
+function TrimControls({ currentTime, duration, startTime, endTime, onSetStart, onSetEnd, onReset, onSplit }) {
   const [startInput, setStartInput] = useState('0');
   const [endInput, setEndInput] = useState('0');
 
@@ -130,6 +130,14 @@ function TrimControls({ currentTime, duration, startTime, endTime, onSetStart, o
             disabled={!duration}
           >
             Set OUT (at {formatTimeDisplay(currentTime)})
+          </button>
+          <button
+            className="trim-button split-button"
+            onClick={onSplit}
+            disabled={!duration || currentTime <= startTime || currentTime >= endTime}
+            title={currentTime <= startTime || currentTime >= endTime ? "Move playhead between IN and OUT points to split" : "Split clip at current time"}
+          >
+            Split at {formatTimeDisplay(currentTime)}
           </button>
         </div>
       </div>

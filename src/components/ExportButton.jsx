@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-function ExportButton({ videoPath, startTime, endTime, duration, disabled }) {
+function ExportButton({ videoPath, startTime, endTime, duration, clips, disabled }) {
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [exportStatus, setExportStatus] = useState('');
@@ -35,23 +35,39 @@ function ExportButton({ videoPath, startTime, endTime, duration, disabled }) {
 
       setExportStatus('Exporting video...');
 
-      // Calculate duration for FFmpeg (NOT end time!)
-      const trimDuration = endTime - startTime;
+      let result;
 
-      console.log('Export params:', {
-        input: videoPath,
-        output: outputPath,
-        start: startTime,
-        duration: trimDuration
-      });
+      // Check if there are clips to export
+      if (clips && clips.length > 0) {
+        console.log('Exporting clips:', clips);
 
-      // Call FFmpeg export
-      const result = await window.electron.exportVideo({
-        input: videoPath,
-        output: outputPath,
-        start: startTime,
-        duration: trimDuration
-      });
+        // Export multiple clips in sequence
+        result = await window.electron.exportClips({
+          input: videoPath,
+          output: outputPath,
+          clips: clips.map(clip => ({
+            start: clip.startTime,
+            duration: clip.endTime - clip.startTime
+          }))
+        });
+      } else {
+        // Simple trim export
+        const trimDuration = endTime - startTime;
+
+        console.log('Export params:', {
+          input: videoPath,
+          output: outputPath,
+          start: startTime,
+          duration: trimDuration
+        });
+
+        result = await window.electron.exportVideo({
+          input: videoPath,
+          output: outputPath,
+          start: startTime,
+          duration: trimDuration
+        });
+      }
 
       if (result.success) {
         setProgress(100);

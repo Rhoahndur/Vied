@@ -2,16 +2,31 @@ import React, { useState } from 'react';
 
 function ImportButton({ onFileSelected, disabled }) {
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('Loading...');
 
   const handleImport = async () => {
     setIsLoading(true);
     try {
-      const filePath = await window.electron.openFile();
+      let filePath = await window.electron.openFile();
 
       if (filePath) {
         console.log('File selected:', filePath);
 
+        // Check if it's a .mov file and convert it to .mp4 for better browser compatibility
+        if (filePath.toLowerCase().endsWith('.mov')) {
+          console.log('Converting .mov file to .mp4 for better compatibility...');
+          setLoadingMessage('Converting .mov to .mp4...');
+          try {
+            filePath = await window.electron.convertMovToMp4(filePath);
+            console.log('Conversion complete:', filePath);
+          } catch (conversionError) {
+            console.error('Conversion failed, trying to use original file:', conversionError);
+            // If conversion fails, try to use the original file
+          }
+        }
+
         // Get video metadata
+        setLoadingMessage('Loading video...');
         const metadata = await window.electron.getVideoMetadata(filePath);
         console.log('Video metadata:', metadata);
 
@@ -37,6 +52,7 @@ function ImportButton({ onFileSelected, disabled }) {
       }
     } finally {
       setIsLoading(false);
+      setLoadingMessage('Loading...');
     }
   };
 
@@ -46,7 +62,7 @@ function ImportButton({ onFileSelected, disabled }) {
       disabled={disabled || isLoading}
       className="import-button"
     >
-      {isLoading ? 'Loading...' : 'Import Video'}
+      {isLoading ? loadingMessage : 'Import Video'}
     </button>
   );
 }

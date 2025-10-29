@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, desktopCapturer, shell, systemPreferences, protocol } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const ffmpeg = require('fluent-ffmpeg');
@@ -40,6 +40,20 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// Register custom protocol as privileged
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'vied-media',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true
+    }
+  }
+]);
+
 let mainWindow;
 
 const createWindow = () => {
@@ -54,6 +68,7 @@ const createWindow = () => {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
+      webSecurity: false, // Allow loading local files
     },
     backgroundColor: '#1e1e1e',
   });
@@ -65,10 +80,21 @@ const createWindow = () => {
   mainWindow.webContents.openDevTools();
 };
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
+// Register custom protocol to serve local video files
 app.whenReady().then(() => {
+  // Register protocol for serving local media files
+  protocol.registerFileProtocol('vied-media', (request, callback) => {
+    const url = request.url.replace('vied-media://', '');
+    const decodedPath = decodeURIComponent(url);
+
+    try {
+      return callback({ path: decodedPath });
+    } catch (error) {
+      console.error('Error serving media file:', error);
+      return callback({ error: -2 }); // net::FAILED
+    }
+  });
+
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the
@@ -140,6 +166,53 @@ ipcMain.handle('save-file', async () => {
     console.error('Error in save-file handler:', error);
     throw error;
   }
+});
+
+// Convert .mov to .mp4 for better browser compatibility
+ipcMain.handle('convert-mov-to-mp4', async (event, movFilePath) => {
+  console.log('convert-mov-to-mp4 handler called', movFilePath);
+
+  return new Promise((resolve, reject) => {
+    // Create output path in temp directory with a simple name to avoid path issues
+    const tempDir = require('os').tmpdir();
+    const timestamp = Date.now();
+    const outputPath = path.join(tempDir, `vied-converted-${timestamp}.mp4`);
+
+    console.log('Converting', movFilePath, 'to', outputPath);
+
+    ffmpeg(movFilePath)
+      .output(outputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .outputOptions([
+        '-preset ultrafast',  // Faster conversion
+        '-crf 23',
+        '-movflags +faststart'
+      ])
+      .on('start', (commandLine) => {
+        console.log('FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        if (progress.percent) {
+          console.log(`Conversion progress: ${progress.percent.toFixed(1)}%`);
+        }
+      })
+      .on('end', () => {
+        console.log('Conversion complete:', outputPath);
+        // Verify file exists
+        if (fs.existsSync(outputPath)) {
+          console.log('Verified converted file exists');
+          resolve(outputPath);
+        } else {
+          reject(new Error('Converted file was not created'));
+        }
+      })
+      .on('error', (err) => {
+        console.error('Conversion error:', err);
+        reject(new Error(`Failed to convert .mov file: ${err.message}`));
+      })
+      .run();
+  });
 });
 
 // Video metadata handler
@@ -223,4 +296,286 @@ ipcMain.handle('export-video', async (event, params) => {
       })
       .run();
   });
+});
+
+// Export multiple clips handler (concatenate clips in sequence)
+ipcMain.handle('export-clips', async (event, params) => {
+  console.log('export-clips handler called', params);
+  const { input, output, clips } = params;
+
+  return new Promise(async (resolve, reject) => {
+    try {
+      const tempDir = app.getPath('temp');
+      const timestamp = Date.now();
+      const tempClipFiles = [];
+      const concatListPath = path.join(tempDir, `vied-concat-list-${timestamp}.txt`);
+
+      // Step 1: Extract each clip to a temporary file
+      console.log(`Extracting ${clips.length} clips...`);
+
+      for (let i = 0; i < clips.length; i++) {
+        const clip = clips[i];
+        const tempClipPath = path.join(tempDir, `vied-clip-${timestamp}-${i}.mp4`);
+        tempClipFiles.push(tempClipPath);
+
+        await new Promise((resolveClip, rejectClip) => {
+          ffmpeg(input)
+            .setStartTime(clip.start)
+            .setDuration(clip.duration)
+            .output(tempClipPath)
+            .videoCodec('libx264')
+            .audioCodec('aac')
+            .outputOptions([
+              '-preset fast',
+              '-crf 23'
+            ])
+            .on('start', (commandLine) => {
+              console.log(`Extracting clip ${i + 1}/${clips.length}:`, commandLine);
+            })
+            .on('end', () => {
+              console.log(`Clip ${i + 1}/${clips.length} extracted`);
+              resolveClip();
+            })
+            .on('error', (err) => {
+              console.error(`Error extracting clip ${i + 1}:`, err);
+              rejectClip(err);
+            })
+            .run();
+        });
+      }
+
+      // Step 2: Create concat list file
+      const concatList = tempClipFiles.map(f => `file '${f}'`).join('\n');
+      fs.writeFileSync(concatListPath, concatList);
+      console.log('Concat list created:', concatListPath);
+
+      // Step 3: Concatenate clips
+      console.log('Concatenating clips...');
+      await new Promise((resolveConcat, rejectConcat) => {
+        ffmpeg()
+          .input(concatListPath)
+          .inputOptions(['-f concat', '-safe 0'])
+          .outputOptions([
+            '-c copy',  // Copy streams without re-encoding for speed
+            '-movflags +faststart'
+          ])
+          .output(output)
+          .on('start', (commandLine) => {
+            console.log('FFmpeg concat command:', commandLine);
+          })
+          .on('end', () => {
+            console.log('Concatenation complete');
+            resolveConcat();
+          })
+          .on('error', (err) => {
+            console.error('Concatenation error:', err);
+            rejectConcat(err);
+          })
+          .run();
+      });
+
+      // Step 4: Clean up temporary files
+      console.log('Cleaning up temporary files...');
+      for (const tempFile of tempClipFiles) {
+        try {
+          fs.unlinkSync(tempFile);
+        } catch (err) {
+          console.error('Error deleting temp file:', err);
+        }
+      }
+      try {
+        fs.unlinkSync(concatListPath);
+      } catch (err) {
+        console.error('Error deleting concat list:', err);
+      }
+
+      console.log('Export complete!');
+      resolve({ success: true });
+    } catch (error) {
+      console.error('Export clips error:', error);
+      reject(new Error(error.message));
+    }
+  });
+});
+
+// Screen recording - check permission status
+ipcMain.handle('check-screen-permission', async () => {
+  console.log('check-screen-permission handler called');
+
+  if (process.platform !== 'darwin') {
+    // Non-macOS platforms don't need permission
+    return { hasPermission: true, platform: process.platform };
+  }
+
+  try {
+    // On macOS, check screen capture access
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    console.log('Screen recording permission status:', status);
+
+    return {
+      hasPermission: status === 'granted',
+      status: status,
+      platform: 'darwin'
+    };
+  } catch (error) {
+    console.error('Error checking screen permission:', error);
+    return { hasPermission: false, error: error.message };
+  }
+});
+
+// Screen recording - open system preferences
+ipcMain.handle('open-system-preferences', async (event, type = 'screen') => {
+  console.log('open-system-preferences handler called for:', type);
+
+  if (process.platform === 'darwin') {
+    if (type === 'camera') {
+      // Open Camera section in System Settings
+      shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Camera');
+    } else {
+      // Open Screen Recording section in System Settings
+      shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    }
+  }
+});
+
+// Camera - check permission status
+ipcMain.handle('check-camera-permission', async () => {
+  console.log('check-camera-permission handler called');
+
+  if (process.platform !== 'darwin') {
+    // Non-macOS platforms don't need permission check via this API
+    return { hasPermission: true, platform: process.platform };
+  }
+
+  try {
+    // On macOS, check camera access
+    const status = systemPreferences.getMediaAccessStatus('camera');
+    console.log('Camera permission status:', status);
+
+    return {
+      hasPermission: status === 'granted',
+      status: status,
+      platform: 'darwin'
+    };
+  } catch (error) {
+    console.error('Error checking camera permission:', error);
+    return { hasPermission: false, error: error.message };
+  }
+});
+
+// Camera - request permission
+ipcMain.handle('request-camera-permission', async () => {
+  console.log('request-camera-permission handler called');
+
+  if (process.platform !== 'darwin') {
+    return { hasPermission: true, platform: process.platform };
+  }
+
+  try {
+    // This will trigger the permission prompt if not already granted
+    const granted = await systemPreferences.askForMediaAccess('camera');
+    console.log('Camera permission granted:', granted);
+
+    return {
+      hasPermission: granted,
+      platform: 'darwin'
+    };
+  } catch (error) {
+    console.error('Error requesting camera permission:', error);
+    return { hasPermission: false, error: error.message };
+  }
+});
+
+// Screen recording - get available sources
+ipcMain.handle('get-sources', async () => {
+  console.log('get-sources handler called');
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['window', 'screen'],
+      thumbnailSize: { width: 150, height: 150 }
+    });
+
+    // Convert thumbnail to data URL for renderer process
+    return sources.map(source => ({
+      id: source.id,
+      name: source.name,
+      thumbnail: source.thumbnail.toDataURL(),
+      display_id: source.display_id,
+      appIcon: source.appIcon ? source.appIcon.toDataURL() : null
+    }));
+  } catch (error) {
+    console.error('Error getting sources:', error);
+    throw error;
+  }
+});
+
+// Screen recording - save recorded video
+ipcMain.handle('save-recording', async (event, buffer) => {
+  console.log('save-recording handler called');
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: 'screen-recording.mp4',
+      filters: [
+        { name: 'MP4 Video', extensions: ['mp4'] },
+        { name: 'WebM Video', extensions: ['webm'] }
+      ],
+      title: 'Save Screen Recording'
+    });
+
+    if (result.canceled) {
+      return null;
+    }
+
+    const filePath = result.filePath;
+    const isMP4 = filePath.toLowerCase().endsWith('.mp4');
+
+    // Write the buffer to a temporary webm file first
+    const tempWebmPath = path.join(app.getPath('temp'), `temp-recording-${Date.now()}.webm`);
+    await fs.promises.writeFile(tempWebmPath, Buffer.from(buffer));
+
+    // If user wants MP4, convert it; otherwise just rename the temp file
+    if (isMP4) {
+      console.log('Converting WebM to MP4...');
+      await new Promise((resolve, reject) => {
+        ffmpeg(tempWebmPath)
+          .output(filePath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .outputOptions([
+            '-preset fast',
+            '-crf 23',
+            '-movflags +faststart'
+          ])
+          .on('start', (commandLine) => {
+            console.log('FFmpeg conversion command:', commandLine);
+          })
+          .on('end', () => {
+            console.log('Conversion complete');
+            // Clean up temp file
+            fs.unlink(tempWebmPath, (err) => {
+              if (err) console.error('Error deleting temp file:', err);
+            });
+            resolve();
+          })
+          .on('error', (err) => {
+            console.error('FFmpeg conversion error:', err);
+            // Clean up temp file
+            fs.unlink(tempWebmPath, (unlinkErr) => {
+              if (unlinkErr) console.error('Error deleting temp file:', unlinkErr);
+            });
+            reject(new Error(err.message));
+          })
+          .run();
+      });
+    } else {
+      // Just move the webm file
+      await fs.promises.rename(tempWebmPath, filePath);
+    }
+
+    console.log('Recording saved to:', filePath);
+    return filePath;
+  } catch (error) {
+    console.error('Error saving recording:', error);
+    throw error;
+  }
 });
