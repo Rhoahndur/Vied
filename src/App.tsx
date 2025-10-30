@@ -298,30 +298,45 @@ export default function App() {
     );
   };
 
-  const handleDropVideoFile = async (filePath: string, insertIndex: number) => {
+  const handleDropMultipleVideos = async (filePaths: string[], insertIndex: number) => {
+    console.log('🎯 handleDropMultipleVideos called with:', filePaths.length, 'files at index', insertIndex);
+    console.log('📋 File paths:', filePaths);
+    console.log('📊 Current editor mode:', editorMode);
+
     try {
       setIsLoading(true);
       setError(null);
 
-      // Get metadata for the dropped video
-      const metadata = await window.electron.getVideoMetadata(filePath);
-      if (!metadata) {
-        setError('Failed to load video metadata');
+      // Get metadata for all dropped videos
+      const newClipsData = await Promise.all(
+        filePaths.map(async (filePath, i) => {
+          const metadata = await window.electron.getVideoMetadata(filePath);
+          if (!metadata) {
+            console.error('Failed to load metadata for:', filePath);
+            return null;
+          }
+
+          return {
+            id: Date.now() + i,
+            startTime: 0, // Will be recalculated
+            endTime: metadata.duration,
+            videoPath: filePath,
+            track: 'main' as const
+          };
+        })
+      );
+
+      // Filter out any failed metadata loads
+      const validNewClips = newClipsData.filter((clip): clip is Clip => clip !== null);
+
+      if (validNewClips.length === 0) {
+        setError('Failed to load video metadata for all files');
         return;
       }
 
-      // Create a new clip with placeholder times (they're sequential in rendering)
-      const newClip: Clip = {
-        id: Date.now(),
-        startTime: 0, // Will be recalculated based on position
-        endTime: metadata.duration,
-        videoPath: filePath,
-        track: 'main'
-      };
-
-      // Insert the clip at the specified index
+      // Insert all new clips at the specified index
       const newClips = [...clips];
-      newClips.splice(insertIndex, 0, newClip);
+      newClips.splice(insertIndex, 0, ...validNewClips);
 
       // Recalculate start/end times for all clips to be sequential
       let accumulatedTime = 0;
@@ -341,21 +356,36 @@ export default function App() {
       // Update the overall duration to total of all clips
       setDuration(accumulatedTime);
 
-      // Select the newly added clip (from the updated clips, not the original)
-      const updatedNewClip = updatedClips.find(c => c.id === newClip.id);
-      if (updatedNewClip) {
-        setSelectedClipId(updatedNewClip.id);
-        setStartTime(updatedNewClip.startTime);
-        setEndTime(updatedNewClip.endTime);
+      // Select the first newly added clip
+      if (validNewClips.length > 0) {
+        const firstNewClip = updatedClips.find(c => c.id === validNewClips[0].id);
+        if (firstNewClip) {
+          setSelectedClipId(firstNewClip.id);
+          setStartTime(firstNewClip.startTime);
+          setEndTime(firstNewClip.endTime);
+        }
       }
 
-      console.log('Inserted video as clip at index', insertIndex, 'Total clips:', updatedClips.length);
+      // Auto-switch to editor mode when videos are added
+      if (!editorMode) {
+        console.log('📝 Switching to editor mode');
+        setEditorMode(true);
+      } else {
+        console.log('✅ Already in editor mode');
+      }
+
+      console.log('✅ Inserted', validNewClips.length, 'clips at index', insertIndex, 'Total clips:', updatedClips.length);
     } catch (error: any) {
-      console.error('Error processing dropped file:', error);
-      setError(error.message || 'Failed to load video file');
+      console.error('Error processing dropped files:', error);
+      setError(error.message || 'Failed to load video files');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDropVideoFile = async (filePath: string, insertIndex: number) => {
+    // Delegate to the multi-file handler
+    await handleDropMultipleVideos([filePath], insertIndex);
   };
 
   const loadVideoFile = async (filePath: string) => {
@@ -442,47 +472,53 @@ export default function App() {
   };
 
   const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
     setIsDragging(false);
 
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
-
-    const file = files[0];
-
     // Only handle drops at app level if no video is loaded yet
-    // If video is already loaded, drops are handled by the Timeline component
+    // If video is already loaded, let the event bubble to Timeline component
     if (videoPath) {
       return;
     }
 
+    // Only prevent default and stop propagation if we're handling it
+    e.preventDefault();
+    e.stopPropagation();
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    const validExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv'];
+
+    // Filter for video files only
+    const videoFiles = files.filter(file => {
+      const fileName = file.name.toLowerCase();
+      return validExtensions.some(ext => fileName.endsWith(ext));
+    });
+
+    if (videoFiles.length === 0) {
+      setError('Please drop valid video files (MP4, MOV, WebM, AVI, MKV)');
+      return;
+    }
+
     try {
-      const filePath = window.electron.getPathForFile(file);
-
-      if (!filePath) {
-        console.error('File path not available:', file);
-        setError('Could not access file path. Please use the Import button instead.');
-        return;
-      }
-
-      const validExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv'];
-      const fileExtension = filePath.toLowerCase();
-      const isValidVideo = validExtensions.some(ext => fileExtension.endsWith(ext));
-
-      if (!isValidVideo) {
-        setError('Please drop a valid video file (MP4, MOV, WebM, AVI, MKV)');
-        return;
-      }
-
       setIsLoading(true);
       setError(null);
 
-      const videoData = await loadVideoFile(filePath);
-      handleFileSelected(videoData);
+      // Get file paths for all video files
+      const filePaths = videoFiles
+        .map(file => window.electron.getPathForFile(file))
+        .filter((path): path is string => path !== undefined);
+
+      if (filePaths.length === 0) {
+        setError('Could not access file paths. Please use the Import button instead.');
+        return;
+      }
+
+      // Use the multi-file handler for initial drop
+      await handleDropMultipleVideos(filePaths, 0);
     } catch (error: any) {
-      console.error('Error processing dropped file:', error);
-      setError(error.message || 'Failed to load video file');
+      console.error('Error processing dropped files:', error);
+      setError(error.message || 'Failed to load video files');
     } finally {
       setIsLoading(false);
     }
@@ -581,6 +617,7 @@ export default function App() {
                   onDeleteClip={handleDeleteClip}
                   onUpdateClip={handleUpdateClip}
                   onDropVideoFile={handleDropVideoFile}
+                  onDropMultipleVideos={handleDropMultipleVideos}
                 />
               </ResizablePanel>
             </ResizablePanelGroup>

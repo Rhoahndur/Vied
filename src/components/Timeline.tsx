@@ -27,6 +27,7 @@ interface TimelineProps {
   onDeleteClip?: (clipId: number) => void;
   onUpdateClip?: (clipId: number, updates: { startTime?: number; endTime?: number }) => void;
   onDropVideoFile?: (filePath: string, insertIndex: number) => void;
+  onDropMultipleVideos?: (filePaths: string[], insertIndex: number) => void;
 }
 
 export function Timeline({
@@ -44,7 +45,8 @@ export function Timeline({
   onReorderClips,
   onDeleteClip,
   onUpdateClip,
-  onDropVideoFile
+  onDropVideoFile,
+  onDropMultipleVideos
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
@@ -455,11 +457,13 @@ export function Timeline({
             }}
             onDrop={async (e) => {
               const types = e.dataTransfer.types;
-              if (types.includes('Files') && !draggedClipId && onDropVideoFile) {
+              if (types.includes('Files') && !draggedClipId && (onDropMultipleVideos || onDropVideoFile)) {
                 e.preventDefault();
                 e.stopPropagation();
 
                 const files = Array.from(e.dataTransfer.files);
+                console.log('📁 Timeline: Files dropped:', files.length);
+
                 const validExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv'];
 
                 // Filter for video files only
@@ -468,16 +472,27 @@ export function Timeline({
                   return validExtensions.some(ext => fileName.endsWith(ext));
                 });
 
-                if (videoFiles.length > 0 && externalFileDropIndex !== null) {
-                  // Process each video file sequentially
-                  for (let i = 0; i < videoFiles.length; i++) {
-                    const file = videoFiles[i];
-                    const filePath = (window as any).electron?.getPathForFile(file);
+                console.log('🎬 Timeline: Video files detected:', videoFiles.length);
 
-                    if (filePath) {
-                      // Insert each file at the appropriate index
-                      // Each subsequent file goes after the previous one
-                      await onDropVideoFile(filePath, externalFileDropIndex + i);
+                if (videoFiles.length > 0 && externalFileDropIndex !== null) {
+                  // Collect all file paths
+                  const filePaths = videoFiles
+                    .map(file => (window as any).electron?.getPathForFile(file))
+                    .filter((path): path is string => path !== undefined);
+
+                  console.log('📂 Timeline: File paths collected:', filePaths.length, filePaths);
+
+                  if (filePaths.length > 0) {
+                    // Use the multi-file handler if available, otherwise fall back
+                    if (onDropMultipleVideos) {
+                      console.log('🚀 Timeline: Calling onDropMultipleVideos with', filePaths.length, 'files');
+                      await onDropMultipleVideos(filePaths, externalFileDropIndex);
+                    } else if (onDropVideoFile) {
+                      console.log('⚠️  Timeline: Falling back to onDropVideoFile (one by one)');
+                      // Fallback: process files one by one
+                      for (let i = 0; i < filePaths.length; i++) {
+                        await onDropVideoFile(filePaths[i], externalFileDropIndex + i);
+                      }
                     }
                   }
                 }
@@ -586,7 +601,7 @@ export function Timeline({
 
                       <div
                         draggable={true}
-                        className={`timeline-clip absolute rounded-lg cursor-move transition-all ${
+                        className={`timeline-clip absolute rounded-md cursor-move transition-all ${
                         isSelected ? 'scale-105' : 'hover:scale-102'
                       } ${isDraggedOver ? 'scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
                       style={{
@@ -595,13 +610,11 @@ export function Timeline({
                         top: '20px',
                         bottom: '20px',
                         backgroundColor: isSelected ? '#60a5fa' : '#3b82f6',
-                        border: isSelected ? '8px solid #fbbf24' : '6px solid #60a5fa',
+                        border: isSelected ? '3px solid #fbbf24' : '2px solid #60a5fa',
                         boxShadow: isSelected
-                          ? '0 0 40px rgba(251, 191, 36, 1), 0 0 60px rgba(251, 191, 36, 0.6), inset 0 0 20px rgba(255,255,255,0.3)'
-                          : '0 0 30px rgba(59, 130, 246, 0.8), inset 0 0 15px rgba(255,255,255,0.2)',
-                        zIndex: isSelected ? 70 : 60,
-                        outline: isSelected ? '4px solid #fbbf24' : 'none',
-                        outlineOffset: isSelected ? '4px' : '0'
+                          ? '0 4px 12px rgba(251, 191, 36, 0.5), 0 2px 6px rgba(0, 0, 0, 0.2)'
+                          : '0 2px 8px rgba(59, 130, 246, 0.3), 0 1px 3px rgba(0, 0, 0, 0.1)',
+                        zIndex: isSelected ? 70 : 60
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
