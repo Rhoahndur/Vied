@@ -6,14 +6,17 @@ function ScreenRecorder({ onRecordingComplete }) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
-  const [recordingMode, setRecordingMode] = useState(null); // 'screen' or 'webcam'
+  const [recordingMode, setRecordingMode] = useState(null); // 'screen', 'webcam', or 'pip'
   const [error, setError] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
   const streamRef = useRef(null);
+  const webcamStreamRef = useRef(null);
+  const canvasRef = useRef(null);
   const timerRef = useRef(null);
   const videoPreviewRef = useRef(null);
+  const pipAnimationRef = useRef(null);
 
   // Start screen recording - fetch available screens/windows
   const startScreenRecording = async () => {
@@ -159,9 +162,52 @@ function ScreenRecorder({ onRecordingComplete }) {
     }
   };
 
+  // Start picture-in-picture recording (screen + webcam)
+  const startPiPRecording = async () => {
+    try {
+      setError(null);
+      setRecordingMode('pip');
+
+      // Attempt to get screen sources first
+      const availableSources = await window.electron.getSources();
+      console.log('Available sources:', availableSources);
+
+      if (availableSources && availableSources.length > 0) {
+        setSources(availableSources);
+        setShowSourcePicker(true);
+      } else {
+        setError({
+          type: 'error',
+          message: 'No screens or windows available',
+          details: 'Could not find any screens or windows to record.'
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching sources for PiP:', err);
+      const errorMessage = err.message || '';
+      const isPermissionError = errorMessage.includes('screen recording permission') ||
+                                errorMessage.includes('Failed to get sources') ||
+                                errorMessage.includes('denied');
+
+      if (isPermissionError) {
+        setError({
+          type: 'permission',
+          message: 'Screen recording permission denied',
+          details: 'macOS blocked screen recording access. Click "Open Settings" below, then look for "Vied" in Privacy & Security → Screen Recording and toggle it ON. After enabling, quit and restart Vied.'
+        });
+      } else {
+        setError({
+          type: 'error',
+          message: 'Failed to get screen sources',
+          details: err.message || 'Please try again.'
+        });
+      }
+    }
+  };
+
   const openSystemPreferences = async () => {
     // Determine which settings to open based on current recording mode
-    const settingsType = recordingMode === 'webcam' ? 'camera' : 'screen';
+    const settingsType = (recordingMode === 'webcam') ? 'camera' : 'screen';
     await window.electron.openSystemPreferences(settingsType);
 
     if (settingsType === 'camera') {
@@ -187,7 +233,7 @@ function ScreenRecorder({ onRecordingComplete }) {
       setShowSourcePicker(false);
 
       // Get the video stream from the selected source
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const screenStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
           mandatory: {
@@ -201,38 +247,149 @@ function ScreenRecorder({ onRecordingComplete }) {
         }
       });
 
-      streamRef.current = stream;
+      streamRef.current = screenStream;
 
-      // Create MediaRecorder
-      const options = { mimeType: 'video/webm; codecs=vp9' };
-      const mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mediaRecorder;
-      recordedChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
+      // If in PiP mode, also get webcam stream and composite
+      if (recordingMode === 'pip') {
+        // Check camera permission first
+        if (window.electron.checkCameraPermission) {
+          const permissionStatus = await window.electron.checkCameraPermission();
+          if (permissionStatus.platform === 'darwin' && !permissionStatus.hasPermission) {
+            const permissionResult = await window.electron.requestCameraPermission();
+            if (!permissionResult.hasPermission) {
+              setError({
+                type: 'permission',
+                message: 'Camera permission denied',
+                details: 'PiP mode needs camera access. Please grant permission and try again.'
+              });
+              screenStream.getTracks().forEach(track => track.stop());
+              return;
+            }
+          }
         }
-      };
 
-      mediaRecorder.onstop = handleRecordingStop;
+        // Get webcam stream
+        const webcamStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 320 },
+            height: { ideal: 240 },
+            facingMode: 'user'
+          },
+          audio: true
+        });
 
-      // Start with timeslice to collect data periodically (every 1 second)
-      mediaRecorder.start(1000);
-      setIsRecording(true);
-      setRecordingTime(0);
+        webcamStreamRef.current = webcamStream;
 
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
+        // Create canvas for compositing
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Get screen video track settings to determine canvas size
+        const screenTrack = screenStream.getVideoTracks()[0];
+        const screenSettings = screenTrack.getSettings();
+        canvas.width = screenSettings.width || 1920;
+        canvas.height = screenSettings.height || 1080;
+
+        canvasRef.current = canvas;
+
+        // Create video elements for rendering
+        const screenVideo = document.createElement('video');
+        const webcamVideo = document.createElement('video');
+
+        screenVideo.srcObject = screenStream;
+        webcamVideo.srcObject = webcamStream;
+        screenVideo.play();
+        webcamVideo.play();
+
+        // PiP position and size (bottom-right corner)
+        const pipWidth = canvas.width * 0.25; // 25% of screen width
+        const pipHeight = (pipWidth / 4) * 3; // 4:3 aspect ratio
+        const pipX = canvas.width - pipWidth - 20; // 20px padding
+        const pipY = canvas.height - pipHeight - 20;
+
+        // Composite function
+        const drawFrame = () => {
+          if (!canvasRef.current) return; // Stop if canvas is destroyed
+
+          // Draw screen (full canvas)
+          ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
+
+          // Draw webcam PiP with border
+          ctx.strokeStyle = '#00ff00';
+          ctx.lineWidth = 4;
+          ctx.strokeRect(pipX - 2, pipY - 2, pipWidth + 4, pipHeight + 4);
+
+          ctx.drawImage(webcamVideo, pipX, pipY, pipWidth, pipHeight);
+
+          if (isRecording) {
+            pipAnimationRef.current = requestAnimationFrame(drawFrame);
+          }
+        };
+
+        // Start compositing
+        drawFrame();
+
+        // Get canvas stream
+        const compositeStream = canvas.captureStream(30); // 30 FPS
+
+        // Add audio from webcam
+        if (webcamStream.getAudioTracks().length > 0) {
+          const audioTrack = webcamStream.getAudioTracks()[0];
+          compositeStream.addTrack(audioTrack);
+        }
+
+        // Create MediaRecorder from composite stream
+        const options = { mimeType: 'video/webm; codecs=vp9' };
+        const mediaRecorder = new MediaRecorder(compositeStream, options);
+        mediaRecorderRef.current = mediaRecorder;
+        recordedChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            recordedChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = handleRecordingStop;
+
+        mediaRecorder.start(1000);
+        setIsRecording(true);
+        setRecordingTime(0);
+
+        timerRef.current = setInterval(() => {
+          setRecordingTime(prev => prev + 1);
+        }, 1000);
+
+      } else {
+        // Normal screen recording (no webcam)
+        const options = { mimeType: 'video/webm; codecs=vp9' };
+        const mediaRecorder = new MediaRecorder(screenStream, options);
+        mediaRecorderRef.current = mediaRecorder;
+        recordedChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            recordedChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = handleRecordingStop;
+
+        mediaRecorder.start(1000);
+        setIsRecording(true);
+        setRecordingTime(0);
+
+        timerRef.current = setInterval(() => {
+          setRecordingTime(prev => prev + 1);
+        }, 1000);
+      }
 
     } catch (err) {
       console.error('Error starting recording:', err);
       setError({
         type: 'error',
         message: 'Failed to start recording',
-        details: 'Make sure you granted screen recording permissions. You may need to restart the app after granting permission.'
+        details: err.message || 'Make sure you granted screen recording permissions. You may need to restart the app after granting permission.'
       });
       setSelectedSource(null);
     }
@@ -248,8 +405,26 @@ function ScreenRecorder({ onRecordingComplete }) {
       mediaRecorderRef.current.stop();
     }
 
+    // Stop screen stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
+    }
+
+    // Stop webcam stream (for PiP mode)
+    if (webcamStreamRef.current) {
+      webcamStreamRef.current.getTracks().forEach(track => track.stop());
+      webcamStreamRef.current = null;
+    }
+
+    // Cancel animation frame (for PiP mode)
+    if (pipAnimationRef.current) {
+      cancelAnimationFrame(pipAnimationRef.current);
+      pipAnimationRef.current = null;
+    }
+
+    // Clear canvas reference
+    if (canvasRef.current) {
+      canvasRef.current = null;
     }
 
     if (timerRef.current) {
@@ -379,6 +554,13 @@ function ScreenRecorder({ onRecordingComplete }) {
           >
             📹 Record Webcam
           </button>
+          <button
+            className="record-pip-button"
+            onClick={startPiPRecording}
+            title="Record screen with webcam overlay (Picture-in-Picture)"
+          >
+            🎥 Screen + Webcam
+          </button>
         </div>
       )}
 
@@ -398,7 +580,11 @@ function ScreenRecorder({ onRecordingComplete }) {
           <div className="recording-indicator">
             <span className="recording-dot"></span>
             <span>
-              Recording {recordingMode === 'webcam' ? '📹 Webcam' : '🖥️ Screen'}: {formatTime(recordingTime)}
+              Recording {
+                recordingMode === 'webcam' ? '📹 Webcam' :
+                recordingMode === 'pip' ? '🎥 Screen + Webcam' :
+                '🖥️ Screen'
+              }: {formatTime(recordingTime)}
             </span>
           </div>
           <button

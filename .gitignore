@@ -91,5 +91,19 @@ typings/
 # Electron-Forge
 out/
 
-# Electron-Builder
+# Build Output
 dist/
+dist-electron/
+build/
+out/
+
+# Electron-Builder
+release/
+*.dmg
+*.zip
+*.blockmap
+*.yml
+
+# OS Files
+.DS_Store
+Thumbs.db

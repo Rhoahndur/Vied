@@ -35,11 +35,6 @@ for (const ffprobePath of possibleProbePaths) {
   }
 }
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (require('electron-squirrel-startup')) {
-  app.quit();
-}
-
 // Register custom protocol as privileged
 protocol.registerSchemesAsPrivileged([
   {
@@ -63,8 +58,9 @@ const createWindow = () => {
     height: 900,
     minWidth: 1000,
     minHeight: 700,
+    title: 'Vied',
     webPreferences: {
-      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
@@ -73,8 +69,24 @@ const createWindow = () => {
     backgroundColor: '#1e1e1e',
   });
 
-  // and load the index.html of the app.
-  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  // Load from Vite dev server in development, or from file in production
+  if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+  }
+
+  // Set CSP to allow custom protocol for media
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; media-src 'self' vied-media: file: data: blob:; img-src 'self' data: blob:; connect-src 'self' ws: wss:;"
+        ]
+      }
+    });
+  });
 
   // Open the DevTools (temporarily enabled for debugging)
   mainWindow.webContents.openDevTools();
@@ -146,18 +158,23 @@ ipcMain.handle('open-file', async () => {
   }
 });
 
-ipcMain.handle('save-file', async () => {
-  console.log('save-file handler called');
+ipcMain.handle('save-file', async (event, format = 'mp4') => {
+  console.log('save-file handler called with format:', format);
   try {
     // Generate a unique filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const defaultFilename = `vied-export-${timestamp}.mp4`;
+    const defaultFilename = `vied-export-${timestamp}.${format}`;
+
+    // Set up filters based on format
+    const filters = {
+      mp4: [{ name: 'MP4 Video', extensions: ['mp4'] }],
+      mov: [{ name: 'MOV Video', extensions: ['mov'] }],
+      webm: [{ name: 'WebM Video', extensions: ['webm'] }]
+    };
 
     const result = await dialog.showSaveDialog(mainWindow, {
       defaultPath: defaultFilename,
-      filters: [
-        { name: 'Video', extensions: ['mp4'] }
-      ],
+      filters: filters[format] || filters.mp4,
       title: 'Save Exported Video'
     });
 
@@ -268,11 +285,48 @@ ipcMain.handle('get-video-metadata', async (event, filePath) => {
 // Video export handler
 ipcMain.handle('export-video', async (event, params) => {
   console.log('export-video handler called', params);
-  const { input, output, start, duration } = params;
+  const { input, output, start, duration, format = 'mp4' } = params;
 
   // Safety check: prevent overwriting input file
   if (path.resolve(input) === path.resolve(output)) {
     throw new Error('Cannot export to the same file as the input. Please choose a different output filename.');
+  }
+
+  // Configure codecs and options based on format
+  let videoCodec, audioCodec, outputOptions;
+
+  switch (format) {
+    case 'webm':
+      videoCodec = 'libvpx-vp9';
+      audioCodec = 'libopus';
+      outputOptions = [
+        '-crf 30',           // Quality for VP9 (15-35 range, 30 is good default)
+        '-b:v 0',            // Use constant quality mode
+        '-deadline good',    // Encoding speed (best, good, realtime)
+        '-cpu-used 2'        // CPU usage (0-5, lower is slower but better quality)
+      ];
+      break;
+
+    case 'mov':
+      videoCodec = 'libx264';
+      audioCodec = 'aac';
+      outputOptions = [
+        '-preset fast',
+        '-crf 23',
+        '-movflags +faststart'
+      ];
+      break;
+
+    case 'mp4':
+    default:
+      videoCodec = 'libx264';
+      audioCodec = 'aac';
+      outputOptions = [
+        '-preset fast',
+        '-crf 23',
+        '-movflags +faststart'
+      ];
+      break;
   }
 
   return new Promise((resolve, reject) => {
@@ -280,13 +334,9 @@ ipcMain.handle('export-video', async (event, params) => {
       .setStartTime(start)  // Where to start trimming (in seconds)
       .setDuration(duration) // How long the output should be (NOT end time!)
       .output(output)
-      .videoCodec('libx264')
-      .audioCodec('aac')
-      .outputOptions([
-        '-preset fast',      // Encoding speed preset
-        '-crf 23',           // Quality (18-28 range, 23 is good default)
-        '-movflags +faststart' // Enable streaming/progressive download
-      ])
+      .videoCodec(videoCodec)
+      .audioCodec(audioCodec)
+      .outputOptions(outputOptions)
       .on('start', (commandLine) => {
         console.log('FFmpeg command:', commandLine);
       })
@@ -310,11 +360,47 @@ ipcMain.handle('export-video', async (event, params) => {
 // Export multiple clips handler (concatenate clips in sequence)
 ipcMain.handle('export-clips', async (event, params) => {
   console.log('export-clips handler called', params);
-  const { input, output, clips } = params;
+  const { input, output, clips, format = 'mp4' } = params;
 
   // Safety check: prevent overwriting input file
   if (path.resolve(input) === path.resolve(output)) {
     throw new Error('Cannot export to the same file as the input. Please choose a different output filename.');
+  }
+
+  // Configure codecs and options based on format
+  let videoCodec, audioCodec, outputOptions;
+
+  switch (format) {
+    case 'webm':
+      videoCodec = 'libvpx-vp9';
+      audioCodec = 'libopus';
+      outputOptions = [
+        '-crf 30',
+        '-b:v 0',
+        '-deadline good',
+        '-cpu-used 2'
+      ];
+      break;
+
+    case 'mov':
+      videoCodec = 'libx264';
+      audioCodec = 'aac';
+      outputOptions = [
+        '-preset fast',
+        '-crf 23',
+        '-movflags +faststart'
+      ];
+      break;
+
+    case 'mp4':
+    default:
+      videoCodec = 'libx264';
+      audioCodec = 'aac';
+      outputOptions = [
+        '-preset fast',
+        '-crf 23'
+      ];
+      break;
   }
 
   return new Promise(async (resolve, reject) => {
@@ -329,7 +415,7 @@ ipcMain.handle('export-clips', async (event, params) => {
 
       for (let i = 0; i < clips.length; i++) {
         const clip = clips[i];
-        const tempClipPath = path.join(tempDir, `vied-clip-${timestamp}-${i}.mp4`);
+        const tempClipPath = path.join(tempDir, `vied-clip-${timestamp}-${i}.${format}`);
         tempClipFiles.push(tempClipPath);
 
         await new Promise((resolveClip, rejectClip) => {
@@ -337,12 +423,9 @@ ipcMain.handle('export-clips', async (event, params) => {
             .setStartTime(clip.start)
             .setDuration(clip.duration)
             .output(tempClipPath)
-            .videoCodec('libx264')
-            .audioCodec('aac')
-            .outputOptions([
-              '-preset fast',
-              '-crf 23'
-            ])
+            .videoCodec(videoCodec)
+            .audioCodec(audioCodec)
+            .outputOptions(outputOptions)
             .on('start', (commandLine) => {
               console.log(`Extracting clip ${i + 1}/${clips.length}:`, commandLine);
             })
@@ -504,10 +587,27 @@ ipcMain.handle('request-camera-permission', async () => {
 ipcMain.handle('get-sources', async () => {
   console.log('get-sources handler called');
   try {
+    // Check screen recording permission on macOS
+    if (process.platform === 'darwin') {
+      const status = systemPreferences.getMediaAccessStatus('screen');
+      console.log('Screen recording permission status:', status);
+
+      if (status === 'denied') {
+        throw new Error('Screen recording permission denied. Please enable it in System Settings > Privacy & Security > Screen Recording.');
+      }
+
+      if (status === 'not-determined') {
+        // First time - this will trigger the system permission dialog
+        console.log('Screen recording permission not determined, will be requested on first capture');
+      }
+    }
+
     const sources = await desktopCapturer.getSources({
       types: ['window', 'screen'],
       thumbnailSize: { width: 150, height: 150 }
     });
+
+    console.log(`Found ${sources.length} screen sources`);
 
     // Convert thumbnail to data URL for renderer process
     return sources.map(source => ({
@@ -519,6 +619,10 @@ ipcMain.handle('get-sources', async () => {
     }));
   } catch (error) {
     console.error('Error getting sources:', error);
+    // Provide more helpful error message
+    if (error.message === 'Failed to get sources.') {
+      throw new Error('Screen recording permission denied. Please enable screen recording permission in System Settings > Privacy & Security > Screen Recording, then quit and restart Vied.');
+    }
     throw error;
   }
 });
@@ -592,4 +696,42 @@ ipcMain.handle('save-recording', async (event, buffer) => {
     console.error('Error saving recording:', error);
     throw error;
   }
+});
+
+// Generate video thumbnail
+ipcMain.handle('generate-thumbnail', async (event, filePath) => {
+  console.log('generate-thumbnail handler called', filePath);
+
+  return new Promise((resolve, reject) => {
+    const tempDir = app.getPath('temp');
+    const timestamp = Date.now();
+    const thumbnailPath = path.join(tempDir, `vied-thumbnail-${timestamp}.jpg`);
+
+    ffmpeg(filePath)
+      .screenshots({
+        count: 1,
+        folder: tempDir,
+        filename: `vied-thumbnail-${timestamp}.jpg`,
+        size: '320x180',
+        timemarks: ['5%']  // Take screenshot at 5% into the video
+      })
+      .on('end', () => {
+        console.log('Thumbnail generated:', thumbnailPath);
+        // Read the thumbnail and convert to base64
+        try {
+          const thumbnailData = fs.readFileSync(thumbnailPath);
+          const base64Thumbnail = `data:image/jpeg;base64,${thumbnailData.toString('base64')}`;
+          // Clean up the temp file
+          fs.unlinkSync(thumbnailPath);
+          resolve(base64Thumbnail);
+        } catch (err) {
+          console.error('Error reading thumbnail:', err);
+          reject(err);
+        }
+      })
+      .on('error', (err) => {
+        console.error('Error generating thumbnail:', err);
+        reject(err);
+      });
+  });
 });

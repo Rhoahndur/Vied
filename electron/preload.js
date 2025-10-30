@@ -32,4 +32,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Camera
   checkCameraPermission: () => ipcRenderer.invoke('check-camera-permission'),
   requestCameraPermission: () => ipcRenderer.invoke('request-camera-permission'),
+
+  // Thumbnail generation
+  generateThumbnail: (filePath) => ipcRenderer.invoke('generate-thumbnail', filePath),
 });
