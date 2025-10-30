@@ -60,7 +60,7 @@ const createWindow = () => {
     minHeight: 700,
     title: 'Vied',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
@@ -69,12 +69,8 @@ const createWindow = () => {
     backgroundColor: '#1e1e1e',
   });
 
-  // Load from Vite dev server in development, or from file in production
-  if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-  }
+  // Load the index.html of the app (handled by electron-forge webpack)
+  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
   // Set CSP to allow custom protocol for media
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
