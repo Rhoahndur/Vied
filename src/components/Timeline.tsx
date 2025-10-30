@@ -28,6 +28,7 @@ interface TimelineProps {
   onUpdateClip?: (clipId: number, updates: { startTime?: number; endTime?: number }) => void;
   onDropVideoFile?: (filePath: string, insertIndex: number) => void;
   onDropMultipleVideos?: (filePaths: string[], insertIndex: number) => void;
+  onBubbleClips?: () => void;
 }
 
 export function Timeline({
@@ -46,7 +47,8 @@ export function Timeline({
   onDeleteClip,
   onUpdateClip,
   onDropVideoFile,
-  onDropMultipleVideos
+  onDropMultipleVideos,
+  onBubbleClips
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
@@ -55,6 +57,7 @@ export function Timeline({
   const [draggedClipId, setDraggedClipId] = useState<number | null>(null);
   const [dragOverClipId, setDragOverClipId] = useState<number | null>(null);
   const [resizingClip, setResizingClip] = useState<{ clipId: number; edge: 'left' | 'right' } | null>(null);
+  const [movingClip, setMovingClip] = useState<{ clipId: number; startX: number; initialStartTime: number } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = 100%, 2 = 200%, etc.
   const [externalFileDropIndex, setExternalFileDropIndex] = useState<number | null>(null);
 
@@ -145,7 +148,7 @@ export function Timeline({
 
   // Handle clip resizing
   useEffect(() => {
-    if (!resizingClip || !onUpdateClip) return;
+    if (!resizingClip || !onUpdateClip || !duration) return;
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!timelineRef.current) return;
@@ -153,32 +156,30 @@ export function Timeline({
       const clip = clips.find(c => c.id === resizingClip.clipId);
       if (!clip) return;
 
-      // Calculate total clips duration
-      const totalClipsDuration = clips.reduce((sum, c) => sum + (c.endTime - c.startTime), 0);
-
       const rect = timelineRef.current.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const percentage = Math.max(0, Math.min(1, mouseX / rect.width));
+      const mouseX = Math.max(0, Math.min(rect.width, e.clientX - rect.left)); // Clamp to timeline bounds
+      const percentage = mouseX / rect.width;
 
-      // Convert percentage to actual video time based on clip position
-      const clipDuration = clip.endTime - clip.startTime;
-      const clipIndex = clips.findIndex(c => c.id === clip.id);
-      const previousClipsDuration = clips.slice(0, clipIndex).reduce((sum, c) => sum + (c.endTime - c.startTime), 0);
+      // Convert percentage to time on the timeline
+      const timeOnTimeline = percentage * duration;
 
-      // Calculate time offset relative to the video
-      const timeInClipSpace = (percentage * totalClipsDuration) - previousClipsDuration;
-      const newTime = clip.startTime + timeInClipSpace;
+      // Minimum clip duration in seconds
+      const minClipDuration = 0.1;
 
       if (resizingClip.edge === 'left') {
-        // Dragging left edge - update startTime with snap-to-grid
-        const rawStartTime = Math.max(0, Math.min(newTime, clip.endTime - 0.5));
-        const snappedStartTime = snapToNearestMarker(rawStartTime);
-        onUpdateClip(clip.id, { startTime: snappedStartTime });
+        // Dragging left edge - trim start
+        // Clamp between 0 and (endTime - minDuration)
+        const maxStartTime = clip.endTime - minClipDuration;
+        const rawStartTime = Math.max(0, Math.min(timeOnTimeline, maxStartTime));
+
+        onUpdateClip(clip.id, { startTime: rawStartTime });
       } else {
-        // Dragging right edge - update endTime with snap-to-grid
-        const rawEndTime = Math.max(clip.startTime + 0.5, newTime);
-        const snappedEndTime = snapToNearestMarker(rawEndTime);
-        onUpdateClip(clip.id, { endTime: snappedEndTime });
+        // Dragging right edge - trim end
+        // Clamp between (startTime + minDuration) and duration
+        const minEndTime = clip.startTime + minClipDuration;
+        const rawEndTime = Math.max(minEndTime, Math.min(timeOnTimeline, duration));
+
+        onUpdateClip(clip.id, { endTime: rawEndTime });
       }
     };
 
@@ -193,7 +194,72 @@ export function Timeline({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [resizingClip, clips, onUpdateClip]);
+  }, [resizingClip, clips, onUpdateClip, duration]);
+
+  // Handle clip moving (drag to reposition in time)
+  useEffect(() => {
+    if (!movingClip || !onUpdateClip || !duration) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!timelineRef.current) return;
+
+      const clip = clips.find(c => c.id === movingClip.clipId);
+      if (!clip) return;
+
+      const rect = timelineRef.current.getBoundingClientRect();
+      const currentX = e.clientX - rect.left;
+      const deltaX = currentX - movingClip.startX;
+
+      // Convert pixel movement to time
+      const deltaTime = (deltaX / rect.width) * duration;
+      let newStartTime = movingClip.initialStartTime + deltaTime;
+
+      // Calculate clip duration
+      const clipDuration = clip.endTime - clip.startTime;
+
+      // Snap to other clips when close (within 0.5 seconds)
+      const snapThreshold = 0.5;
+      const otherClips = clips.filter(c => c.id !== movingClip.clipId);
+
+      for (const otherClip of otherClips) {
+        // Snap to end of other clip
+        const distToEnd = Math.abs(newStartTime - otherClip.endTime);
+        if (distToEnd < snapThreshold) {
+          newStartTime = otherClip.endTime;
+          break;
+        }
+
+        // Snap to start of other clip (align our end with their start)
+        const ourEndTime = newStartTime + clipDuration;
+        const distToStart = Math.abs(ourEndTime - otherClip.startTime);
+        if (distToStart < snapThreshold) {
+          newStartTime = otherClip.startTime - clipDuration;
+          break;
+        }
+      }
+
+      // Clamp to valid range
+      const clampedStartTime = Math.max(0, Math.min(newStartTime, duration - clipDuration));
+      const clampedEndTime = clampedStartTime + clipDuration;
+
+      onUpdateClip(clip.id, {
+        startTime: clampedStartTime,
+        endTime: clampedEndTime
+      });
+    };
+
+    const handleMouseUp = () => {
+      setMovingClip(null);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [movingClip, clips, onUpdateClip, duration]);
 
   // Handle mousewheel zoom
   useEffect(() => {
@@ -462,8 +528,6 @@ export function Timeline({
                 e.stopPropagation();
 
                 const files = Array.from(e.dataTransfer.files);
-                console.log('📁 Timeline: Files dropped:', files.length);
-
                 const validExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv'];
 
                 // Filter for video files only
@@ -472,23 +536,17 @@ export function Timeline({
                   return validExtensions.some(ext => fileName.endsWith(ext));
                 });
 
-                console.log('🎬 Timeline: Video files detected:', videoFiles.length);
-
                 if (videoFiles.length > 0 && externalFileDropIndex !== null) {
                   // Collect all file paths
                   const filePaths = videoFiles
                     .map(file => (window as any).electron?.getPathForFile(file))
                     .filter((path): path is string => path !== undefined);
 
-                  console.log('📂 Timeline: File paths collected:', filePaths.length, filePaths);
-
                   if (filePaths.length > 0) {
                     // Use the multi-file handler if available, otherwise fall back
                     if (onDropMultipleVideos) {
-                      console.log('🚀 Timeline: Calling onDropMultipleVideos with', filePaths.length, 'files');
                       await onDropMultipleVideos(filePaths, externalFileDropIndex);
                     } else if (onDropVideoFile) {
-                      console.log('⚠️  Timeline: Falling back to onDropVideoFile (one by one)');
                       // Fallback: process files one by one
                       for (let i = 0; i < filePaths.length; i++) {
                         await onDropVideoFile(filePaths[i], externalFileDropIndex + i);
@@ -532,18 +590,14 @@ export function Timeline({
               onClick={handleTimelineClick}
             >
               {/* Main Track Clips - show only clips with track === 'main' */}
-              {clips && clips.length > 0 && (() => {
+              {clips && clips.length > 0 && duration > 0 && (() => {
                 const mainClips = clips.filter(c => c.track === 'main');
                 if (mainClips.length === 0) return null;
 
-                const totalClipsDuration = mainClips.reduce((sum, c) => sum + (c.endTime - c.startTime), 0);
-                let accumulatedDuration = 0;
-
                 return mainClips.map((clip, index) => {
-                  const clipDuration = clip.endTime - clip.startTime;
-                  const gapWidth = 0.5;
-                  const clipStartPos = (accumulatedDuration / totalClipsDuration) * 100 + (index * gapWidth);
-                  const clipWidth = (clipDuration / totalClipsDuration) * 100 - gapWidth;
+                  // Position clips based on their actual startTime/endTime relative to total duration
+                  const clipStartPos = (clip.startTime / duration) * 100;
+                  const clipWidth = ((clip.endTime - clip.startTime) / duration) * 100;
 
                   const isSelected = clip.id === selectedClipId;
                   const isDraggedOver = clip.id === dragOverClipId;
@@ -553,8 +607,6 @@ export function Timeline({
                   const draggedIndex = mainClips.findIndex(c => c.id === draggedClipId);
                   const targetIndex = index;
                   const isDraggingLeftToRight = draggedIndex !== -1 && draggedIndex < targetIndex;
-
-                  accumulatedDuration += clipDuration;
 
                   return (
                     <React.Fragment key={clip.id}>
@@ -696,7 +748,28 @@ export function Timeline({
                         </>
                       )}
 
-                      <div className="absolute inset-0 flex items-center justify-between px-2 gap-1.5">
+                      <div
+                        className="absolute inset-0 flex items-center justify-between px-2 gap-1.5"
+                        onMouseDown={(e) => {
+                          // Only start moving if clicking on the clip body, not buttons or trim handles
+                          if (
+                            !timelineRef.current ||
+                            e.target instanceof Element && (
+                              e.target.closest('button') ||
+                              e.target.closest('.cursor-ew-resize')
+                            )
+                          ) return;
+
+                          e.stopPropagation();
+                          const rect = timelineRef.current.getBoundingClientRect();
+                          setMovingClip({
+                            clipId: clip.id,
+                            startX: e.clientX - rect.left,
+                            initialStartTime: clip.startTime
+                          });
+                        }}
+                        style={{ cursor: movingClip?.clipId === clip.id ? 'grabbing' : 'grab' }}
+                      >
                         <div className="flex items-center gap-1.5">
                           <div className="text-white/90 flex-shrink-0">
                             <Film className="h-3 w-3" />
@@ -728,10 +801,9 @@ export function Timeline({
                             className="absolute top-0 bottom-0 cursor-ew-resize"
                             style={{
                               left: '0px',
-                              width: '6px',
-                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
-                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
-                              borderRadius: '3px',
+                              width: '3px',
+                              background: '#fbbf24',
+                              borderRadius: '1.5px',
                               zIndex: 999
                             }}
                             onMouseDown={(e) => {
@@ -742,10 +814,12 @@ export function Timeline({
                             title="◀ Drag to trim IN point"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
-                              left: '15px',
+                            <div className="absolute w-8 h-8 border-2 border-white rounded-full" style={{
+                              top: '50%',
+                              left: '12px',
+                              transform: 'translateY(-50%)',
                               backgroundColor: '#9ca3af',
-                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                              boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)'
                             }} />
                             {/* Time label - only show when resizing this edge */}
                             {resizingClip?.clipId === clip.id && resizingClip?.edge === 'left' && (
@@ -762,10 +836,9 @@ export function Timeline({
                             className="absolute top-0 bottom-0 cursor-ew-resize"
                             style={{
                               right: '0px',
-                              width: '6px',
-                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
-                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
-                              borderRadius: '3px',
+                              width: '3px',
+                              background: '#fbbf24',
+                              borderRadius: '1.5px',
                               zIndex: 999
                             }}
                             onMouseDown={(e) => {
@@ -776,10 +849,12 @@ export function Timeline({
                             title="Drag to trim OUT point ▶"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
-                              right: '15px',
+                            <div className="absolute w-8 h-8 border-2 border-white rounded-full" style={{
+                              top: '50%',
+                              right: '12px',
+                              transform: 'translateY(-50%)',
                               backgroundColor: '#9ca3af',
-                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                              boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)'
                             }} />
                             {/* Time label - only show when resizing this edge */}
                             {resizingClip?.clipId === clip.id && resizingClip?.edge === 'right' && (
@@ -1018,7 +1093,28 @@ export function Timeline({
                         </>
                       )}
 
-                      <div className="absolute inset-0 flex items-center justify-between px-2 gap-1.5">
+                      <div
+                        className="absolute inset-0 flex items-center justify-between px-2 gap-1.5"
+                        onMouseDown={(e) => {
+                          // Only start moving if clicking on the clip body, not buttons or trim handles
+                          if (
+                            !timelineRef.current ||
+                            e.target instanceof Element && (
+                              e.target.closest('button') ||
+                              e.target.closest('.cursor-ew-resize')
+                            )
+                          ) return;
+
+                          e.stopPropagation();
+                          const rect = timelineRef.current.getBoundingClientRect();
+                          setMovingClip({
+                            clipId: clip.id,
+                            startX: e.clientX - rect.left,
+                            initialStartTime: clip.startTime
+                          });
+                        }}
+                        style={{ cursor: movingClip?.clipId === clip.id ? 'grabbing' : 'grab' }}
+                      >
                         <div className="flex items-center gap-1.5">
                           <div className="text-white/90 flex-shrink-0">
                             <Film className="h-3 w-3" />
@@ -1050,10 +1146,9 @@ export function Timeline({
                             className="absolute top-0 bottom-0 cursor-ew-resize"
                             style={{
                               left: '0px',
-                              width: '6px',
-                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
-                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
-                              borderRadius: '3px',
+                              width: '3px',
+                              background: '#fbbf24',
+                              borderRadius: '1.5px',
                               zIndex: 999
                             }}
                             onMouseDown={(e) => {
@@ -1064,10 +1159,12 @@ export function Timeline({
                             title="◀ Drag to trim IN point"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
-                              left: '15px',
+                            <div className="absolute w-8 h-8 border-2 border-white rounded-full" style={{
+                              top: '50%',
+                              left: '12px',
+                              transform: 'translateY(-50%)',
                               backgroundColor: '#9ca3af',
-                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                              boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)'
                             }} />
                             {/* Time label - only show when resizing this edge */}
                             {resizingClip?.clipId === clip.id && resizingClip?.edge === 'left' && (
@@ -1084,10 +1181,9 @@ export function Timeline({
                             className="absolute top-0 bottom-0 cursor-ew-resize"
                             style={{
                               right: '0px',
-                              width: '6px',
-                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
-                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
-                              borderRadius: '3px',
+                              width: '3px',
+                              background: '#fbbf24',
+                              borderRadius: '1.5px',
                               zIndex: 999
                             }}
                             onMouseDown={(e) => {
@@ -1098,10 +1194,12 @@ export function Timeline({
                             title="Drag to trim OUT point ▶"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
-                              right: '15px',
+                            <div className="absolute w-8 h-8 border-2 border-white rounded-full" style={{
+                              top: '50%',
+                              right: '12px',
+                              transform: 'translateY(-50%)',
                               backgroundColor: '#9ca3af',
-                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                              boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)'
                             }} />
                             {/* Time label - only show when resizing this edge */}
                             {resizingClip?.clipId === clip.id && resizingClip?.edge === 'right' && (

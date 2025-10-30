@@ -298,11 +298,33 @@ export default function App() {
     );
   };
 
-  const handleDropMultipleVideos = async (filePaths: string[], insertIndex: number) => {
-    console.log('🎯 handleDropMultipleVideos called with:', filePaths.length, 'files at index', insertIndex);
-    console.log('📋 File paths:', filePaths);
-    console.log('📊 Current editor mode:', editorMode);
+  // Bubble clips together - remove gaps between clips
+  const bubbleClipsTogether = () => {
+    setClips(prevClips => {
+      // Sort clips by their startTime
+      const sortedClips = [...prevClips].sort((a, b) => a.startTime - b.startTime);
 
+      // Remove gaps by adjusting startTime/endTime to be sequential
+      let accumulatedTime = 0;
+      const bubbledClips = sortedClips.map(clip => {
+        const clipDuration = clip.endTime - clip.startTime;
+        const newClip = {
+          ...clip,
+          startTime: accumulatedTime,
+          endTime: accumulatedTime + clipDuration
+        };
+        accumulatedTime += clipDuration;
+        return newClip;
+      });
+
+      // Update total duration
+      setDuration(accumulatedTime);
+
+      return bubbledClips;
+    });
+  };
+
+  const handleDropMultipleVideos = async (filePaths: string[], insertIndex: number) => {
     try {
       setIsLoading(true);
       setError(null);
@@ -368,13 +390,8 @@ export default function App() {
 
       // Auto-switch to editor mode when videos are added
       if (!editorMode) {
-        console.log('📝 Switching to editor mode');
         setEditorMode(true);
-      } else {
-        console.log('✅ Already in editor mode');
       }
-
-      console.log('✅ Inserted', validNewClips.length, 'clips at index', insertIndex, 'Total clips:', updatedClips.length);
     } catch (error: any) {
       console.error('Error processing dropped files:', error);
       setError(error.message || 'Failed to load video files');
@@ -618,6 +635,7 @@ export default function App() {
                   onUpdateClip={handleUpdateClip}
                   onDropVideoFile={handleDropVideoFile}
                   onDropMultipleVideos={handleDropMultipleVideos}
+                  onBubbleClips={bubbleClipsTogether}
                 />
               </ResizablePanel>
             </ResizablePanelGroup>
