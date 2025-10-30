@@ -3,18 +3,29 @@ import { Button } from "./ui/button";
 import { Slider } from "./ui/slider";
 import { useRef, useEffect, useState } from "react";
 
+interface Clip {
+  id: number;
+  startTime: number;
+  endTime: number;
+  videoPath: string;
+  track: 'main' | 'overlay';
+}
+
 interface VideoPreviewProps {
   videoPath: string | null;
   onTimeUpdate?: (time: number) => void;
   onSeekReady?: (seekFunction: (time: number) => void) => void;
   clipCount?: number;
+  clips?: Clip[];
 }
 
-export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount = 1 }: VideoPreviewProps) {
+export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount = 1, clips = [] }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [currentClipIndex, setCurrentClipIndex] = useState(0);
+  const [loadedVideoPath, setLoadedVideoPath] = useState<string | null>(null);
   const [volume, setVolume] = useState([80]);
   const [isMuted, setIsMuted] = useState(false);
   const [isDraggingTimeline, setIsDraggingTimeline] = useState(false);
@@ -27,13 +38,46 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
   // Expose seek function to parent via callback
   useEffect(() => {
     if (onSeekReady && videoRef.current) {
-      onSeekReady((time: number) => {
-        if (videoRef.current) {
-          videoRef.current.currentTime = time;
+      onSeekReady((timelineTime: number) => {
+        if (!videoRef.current) return;
+
+        // If we have clips, find which clip this time falls in
+        if (clips.length > 0) {
+          const clipIndex = clips.findIndex(
+            clip => timelineTime >= clip.startTime && timelineTime < clip.endTime
+          );
+
+          if (clipIndex !== -1) {
+            const clip = clips[clipIndex];
+            const videoSeekTime = timelineTime - clip.startTime;
+
+            // If we need to switch clips, load the new video
+            if (clip.videoPath !== loadedVideoPath) {
+              const normalizedPath = clip.videoPath.replace(/\\\\/g, '/');
+              const mediaUrl = `vied-media://${normalizedPath}`;
+              videoRef.current.src = mediaUrl;
+              videoRef.current.load();
+              setLoadedVideoPath(clip.videoPath);
+              setCurrentClipIndex(clipIndex);
+
+              // Seek after metadata loads
+              videoRef.current.onloadedmetadata = () => {
+                if (videoRef.current) {
+                  videoRef.current.currentTime = videoSeekTime;
+                }
+              };
+            } else {
+              // Same clip, just seek
+              videoRef.current.currentTime = videoSeekTime;
+            }
+          }
+        } else {
+          // No clips, use old behavior
+          videoRef.current.currentTime = timelineTime;
         }
       });
     }
-  }, [onSeekReady]);
+  }, [onSeekReady, clips, loadedVideoPath]);
 
   // Update video source when videoPath changes
   useEffect(() => {
@@ -61,10 +105,48 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      const time = videoRef.current.currentTime;
-      setCurrentTime(time);
-      if (onTimeUpdate) {
-        onTimeUpdate(time);
+      const videoTime = videoRef.current.currentTime;
+      setCurrentTime(videoTime);
+
+      // Convert video time to timeline time if we have clips
+      if (clips.length > 0 && currentClipIndex < clips.length) {
+        const currentClip = clips[currentClipIndex];
+        const timelineTime = currentClip.startTime + videoTime;
+
+        if (onTimeUpdate) {
+          onTimeUpdate(timelineTime);
+        }
+
+        // Check if we've reached the end of the current clip
+        if (isPlaying && videoTime >= (currentClip.endTime - currentClip.startTime)) {
+          // Move to next clip if available
+          if (currentClipIndex < clips.length - 1) {
+            const nextClip = clips[currentClipIndex + 1];
+            const normalizedPath = nextClip.videoPath.replace(/\\\\/g, '/');
+            const mediaUrl = `vied-media://${normalizedPath}`;
+
+            if (videoRef.current) {
+              videoRef.current.src = mediaUrl;
+              videoRef.current.load();
+              setLoadedVideoPath(nextClip.videoPath);
+              setCurrentClipIndex(currentClipIndex + 1);
+
+              videoRef.current.onloadedmetadata = () => {
+                if (videoRef.current && isPlaying) {
+                  videoRef.current.play();
+                }
+              };
+            }
+          } else {
+            // Last clip ended
+            setIsPlaying(false);
+          }
+        }
+      } else {
+        // No clips, use old behavior
+        if (onTimeUpdate) {
+          onTimeUpdate(videoTime);
+        }
       }
     }
   };

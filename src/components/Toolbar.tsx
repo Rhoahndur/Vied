@@ -2,7 +2,8 @@ import { Download, Film, Eye } from "lucide-react";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { useState } from "react";
+import { Progress } from "./ui/progress";
+import { useState, useEffect } from "react";
 
 interface Clip {
   id: number;
@@ -25,6 +26,31 @@ interface ToolbarProps {
 export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabled, editorMode, onToggleEditorMode }: ToolbarProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState("mp4");
+  const [exportProgress, setExportProgress] = useState(0);
+
+  // Funny progress messages
+  const getProgressMessage = (percent: number) => {
+    if (percent < 10) return "Warming up the pixel forge...";
+    if (percent < 20) return "Rounding up some digital elves...";
+    if (percent < 30) return "Polishing the frames...";
+    if (percent < 40) return "Teaching pixels to dance...";
+    if (percent < 50) return "Oooh this is a big 'un, onboarding some elves to help...";
+    if (percent < 60) return "Convincing the codec gremlins...";
+    if (percent < 70) return "Wrangling stubborn megabytes...";
+    if (percent < 80) return "Almost there, just trimming the excess...";
+    if (percent < 90) return "Wrapping it up with a bow...";
+    if (percent < 100) return "Final touches, making it shine...";
+    return "Done! The elves have clocked out.";
+  };
+
+  // Listen for export progress updates
+  useEffect(() => {
+    const cleanup = window.electron.onExportProgress((data: { percent: number }) => {
+      setExportProgress(data.percent);
+    });
+
+    return cleanup;
+  }, []);
 
   const formatTime = (seconds: number) => {
     if (!seconds || isNaN(seconds)) return '0:00';
@@ -39,9 +65,12 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
       return;
     }
 
+    console.log('[Toolbar] handleExport called, exportFormat:', exportFormat);
     setIsExporting(true);
+    setExportProgress(0);
 
     try {
+      console.log('[Toolbar] Calling saveFile with format:', exportFormat);
       const outputPath = await window.electron.saveFile(exportFormat);
 
       if (!outputPath) {
@@ -56,12 +85,12 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
         console.log('Exporting clips:', clips);
 
         result = await window.electron.exportClips({
-          input: videoPath,
           output: outputPath,
           format: exportFormat,
           clips: clips.map(clip => ({
-            start: clip.startTime,
-            duration: clip.endTime - clip.startTime
+            input: clip.videoPath,  // Each clip has its own source video
+            start: 0,  // Always start from beginning of each clip's video
+            duration: clip.endTime - clip.startTime  // Duration of the clip on timeline
           }))
         });
       } else {
@@ -95,6 +124,7 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
       alert(`Export error: ${error.message}`);
     } finally {
       setIsExporting(false);
+      setExportProgress(0);
     }
   };
 
@@ -173,20 +203,31 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
             <SelectItem value="mp4">MP4</SelectItem>
             <SelectItem value="mov">MOV</SelectItem>
             <SelectItem value="webm">WebM</SelectItem>
+            <SelectItem value="gif">GIF</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       {/* Export Button */}
-      <Button
-        size="sm"
-        className="gap-2"
-        onClick={handleExport}
-        disabled={disabled || isExporting || !videoPath}
-      >
-        <Download className="h-4 w-4" />
-        {isExporting ? 'Exporting...' : 'Export'}
-      </Button>
+      <div className="flex flex-col gap-1.5">
+        <Button
+          size="sm"
+          className="gap-2"
+          onClick={handleExport}
+          disabled={disabled || isExporting || !videoPath}
+        >
+          <Download className="h-4 w-4" />
+          {isExporting ? `${exportProgress}%` : 'Export'}
+        </Button>
+        {isExporting && exportProgress > 0 && (
+          <>
+            <Progress value={exportProgress} className="w-full h-1.5" />
+            <div className="text-xs text-black/60 dark:text-white/60 italic text-center px-2">
+              {getProgressMessage(exportProgress)}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

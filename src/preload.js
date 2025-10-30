@@ -8,7 +8,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('electron', {
   // File operations
   openFile: () => ipcRenderer.invoke('open-file'),
-  saveFile: () => ipcRenderer.invoke('save-file'),
+  saveFile: (format) => ipcRenderer.invoke('save-file', format),
 
   // Video operations
   exportVideo: (params) => ipcRenderer.invoke('export-video', params),
@@ -40,4 +40,12 @@ contextBridge.exposeInMainWorld('electron', {
 
   // Thumbnail generation
   generateThumbnail: (filePath) => ipcRenderer.invoke('generate-thumbnail', filePath),
+
+  // Export progress listener
+  onExportProgress: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('export-progress', subscription);
+    // Return cleanup function
+    return () => ipcRenderer.removeListener('export-progress', subscription);
+  },
 });

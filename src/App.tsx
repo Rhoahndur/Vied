@@ -74,6 +74,7 @@ export default function App() {
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [editorMode, setEditorMode] = useState(false); // QuickTime-style: false = viewer, true = editor
   const seekFunctionRef = useRef<((time: number) => void) | null>(null);
+  const nextClipIdRef = useRef(1); // Counter for unique clip IDs
 
   // Load recent files from localStorage on mount
   useEffect(() => {
@@ -146,7 +147,7 @@ export default function App() {
 
       // Create a clip immediately for the imported video (full duration)
       const newClip: Clip = {
-        id: Date.now(),
+        id: nextClipIdRef.current++,
         startTime: 0,
         endTime: dur,
         videoPath: data.path,
@@ -225,14 +226,14 @@ export default function App() {
 
     const newClips: Clip[] = [
       {
-        id: Date.now(),
+        id: nextClipIdRef.current++,
         startTime: selectedClip.startTime,
         endTime: currentTime,
         videoPath: selectedClip.videoPath,
         track: selectedClip.track
       },
       {
-        id: Date.now() + 1,
+        id: nextClipIdRef.current++,
         startTime: currentTime,
         endTime: selectedClip.endTime,
         videoPath: selectedClip.videoPath,
@@ -339,7 +340,7 @@ export default function App() {
           }
 
           return {
-            id: Date.now() + i,
+            id: nextClipIdRef.current++,
             startTime: 0, // Will be recalculated
             endTime: metadata.duration,
             videoPath: filePath,
@@ -378,8 +379,18 @@ export default function App() {
       // Update the overall duration to total of all clips
       setDuration(accumulatedTime);
 
-      // Select the first newly added clip
+      // Set videoPath and metadata from the first clip for preview and export
       if (validNewClips.length > 0) {
+        const firstClipPath = validNewClips[0].videoPath;
+        setVideoPath(firstClipPath);
+
+        // Get metadata for the first clip
+        const firstMetadata = await window.electron.getVideoMetadata(firstClipPath);
+        if (firstMetadata) {
+          setVideoMetadata(firstMetadata);
+        }
+
+        // Select the first newly added clip
         const firstNewClip = updatedClips.find(c => c.id === validNewClips[0].id);
         if (firstNewClip) {
           setSelectedClipId(firstNewClip.id);
@@ -612,6 +623,7 @@ export default function App() {
                     onTimeUpdate={handleTimeUpdate}
                     onSeekReady={handleSeekReady}
                     clipCount={clips.length}
+                    clips={clips}
                   />
                 </div>
               </ResizablePanel>

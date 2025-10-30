@@ -175,7 +175,8 @@ ipcMain.handle('save-file', async (event, format = 'mp4') => {
     const filters = {
       mp4: [{ name: 'MP4 Video', extensions: ['mp4'] }],
       mov: [{ name: 'MOV Video', extensions: ['mov'] }],
-      webm: [{ name: 'WebM Video', extensions: ['webm'] }]
+      webm: [{ name: 'WebM Video', extensions: ['webm'] }],
+      gif: [{ name: 'GIF Animation', extensions: ['gif'] }]
     };
 
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -302,6 +303,14 @@ ipcMain.handle('export-video', async (event, params) => {
   let videoCodec, audioCodec, outputOptions;
 
   switch (format) {
+    case 'gif':
+      // GIF exports don't use traditional video/audio codecs
+      // We'll handle GIF specially below
+      videoCodec = null;
+      audioCodec = null;
+      outputOptions = [];
+      break;
+
     case 'webm':
       videoCodec = 'libvpx-vp9';
       audioCodec = 'libopus';
@@ -336,27 +345,56 @@ ipcMain.handle('export-video', async (event, params) => {
   }
 
   return new Promise((resolve, reject) => {
-    ffmpeg(input)
+    const command = ffmpeg(input)
       .setStartTime(start)  // Where to start trimming (in seconds)
-      .setDuration(duration) // How long the output should be (NOT end time!)
-      .output(output)
-      .videoCodec(videoCodec)
-      .audioCodec(audioCodec)
-      .outputOptions(outputOptions)
+      .setDuration(duration); // How long the output should be (NOT end time!)
+
+    if (format === 'gif') {
+      // GIF export with high compression
+      command
+        .output(output)
+        .fps(10) // Reduce FPS to 10 for 10x compression
+        .size('640x?') // Scale down width to 640px, maintain aspect ratio
+        .outputOptions([
+          '-vf', 'split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5',
+          '-loop', '0' // Loop forever
+        ]);
+    } else {
+      // Standard video export
+      command
+        .output(output)
+        .videoCodec(videoCodec)
+        .audioCodec(audioCodec)
+        .outputOptions(outputOptions);
+    }
+
+    command
       .on('start', (commandLine) => {
         console.log('FFmpeg command:', commandLine);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('export-progress', { percent: 0 });
+        }
       })
       .on('progress', (progress) => {
         console.log('Processing:', progress);
-        // progress.percent would be available here for progress bar
-        // Could send to renderer via mainWindow.webContents.send() if needed
+        if (mainWindow && !mainWindow.isDestroyed() && progress.percent) {
+          mainWindow.webContents.send('export-progress', {
+            percent: Math.round(progress.percent)
+          });
+        }
       })
       .on('end', () => {
         console.log('Export complete');
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('export-progress', { percent: 100 });
+        }
         resolve({ success: true });
       })
       .on('error', (err) => {
         console.error('FFmpeg error:', err);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('export-progress', { percent: 0 });
+        }
         reject(new Error(err.message));
       })
       .run();
@@ -366,17 +404,30 @@ ipcMain.handle('export-video', async (event, params) => {
 // Export multiple clips handler (concatenate clips in sequence)
 ipcMain.handle('export-clips', async (event, params) => {
   console.log('export-clips handler called', params);
-  const { input, output, clips, format = 'mp4' } = params;
+  const { output, clips, format = 'mp4' } = params;
 
-  // Safety check: prevent overwriting input file
-  if (path.resolve(input) === path.resolve(output)) {
-    throw new Error('Cannot export to the same file as the input. Please choose a different output filename.');
+  // Safety check: prevent overwriting any input file
+  for (const clip of clips) {
+    if (clip.input && path.resolve(clip.input) === path.resolve(output)) {
+      throw new Error('Cannot export to the same file as the input. Please choose a different output filename.');
+    }
   }
 
   // Configure codecs and options based on format
+  // For GIF, we'll use MP4 for temp files and convert to GIF at the end
   let videoCodec, audioCodec, outputOptions;
 
   switch (format) {
+    case 'gif':
+      // Use MP4 codecs for temp files - will convert to GIF in concat step
+      videoCodec = 'libx264';
+      audioCodec = 'aac';
+      outputOptions = [
+        '-preset fast',
+        '-crf 23'
+      ];
+      break;
+
     case 'webm':
       videoCodec = 'libvpx-vp9';
       audioCodec = 'libopus';
@@ -421,22 +472,53 @@ ipcMain.handle('export-clips', async (event, params) => {
 
       for (let i = 0; i < clips.length; i++) {
         const clip = clips[i];
-        const tempClipPath = path.join(tempDir, `vied-clip-${timestamp}-${i}.${format}`);
+        // Always use MP4 for temp files, even for GIF - convert to GIF at end
+        const tempFormat = format === 'gif' ? 'mp4' : format;
+        const tempClipPath = path.join(tempDir, `vied-clip-${timestamp}-${i}.${tempFormat}`);
         tempClipFiles.push(tempClipPath);
 
         await new Promise((resolveClip, rejectClip) => {
-          ffmpeg(input)
+          const clipCommand = ffmpeg(clip.input)  // Use each clip's own source video
             .setStartTime(clip.start)
             .setDuration(clip.duration)
             .output(tempClipPath)
             .videoCodec(videoCodec)
             .audioCodec(audioCodec)
-            .outputOptions(outputOptions)
+            .outputOptions(outputOptions);
+
+          clipCommand
             .on('start', (commandLine) => {
               console.log(`Extracting clip ${i + 1}/${clips.length}:`, commandLine);
+              // Send initial progress for this clip
+              const baseProgress = (i / clips.length) * 80;
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('export-progress', {
+                  percent: Math.round(baseProgress)
+                });
+              }
+            })
+            .on('progress', (progress) => {
+              // Each clip takes up 80% / clips.length of total progress
+              const clipProgressWeight = 80 / clips.length;
+              const baseProgress = (i / clips.length) * 80;
+              const clipPercent = progress.percent || 0;
+              const totalPercent = baseProgress + (clipPercent / 100) * clipProgressWeight;
+
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('export-progress', {
+                  percent: Math.round(totalPercent)
+                });
+              }
             })
             .on('end', () => {
               console.log(`Clip ${i + 1}/${clips.length} extracted`);
+              // Update progress after clip completion
+              const completedProgress = ((i + 1) / clips.length) * 80;
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('export-progress', {
+                  percent: Math.round(completedProgress)
+                });
+              }
               resolveClip();
             })
             .on('error', (err) => {
@@ -455,23 +537,57 @@ ipcMain.handle('export-clips', async (event, params) => {
       // Step 3: Concatenate clips
       console.log('Concatenating clips...');
       await new Promise((resolveConcat, rejectConcat) => {
-        ffmpeg()
+        const concatCommand = ffmpeg()
           .input(concatListPath)
           .inputOptions(['-f concat', '-safe 0'])
-          .outputOptions([
+          .output(output);
+
+        // GIF format needs special handling - can't use -c copy
+        if (format === 'gif') {
+          concatCommand
+            .noAudio()  // Remove audio for GIF
+            .fps(5)  // Simple: just 5 frames per second
+            .size('400x?')  // Scale to 400px width
+            .outputOptions([
+              '-vf', 'split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse',
+              '-loop', '0'
+            ]);
+        } else {
+          concatCommand.outputOptions([
             '-c copy',  // Copy streams without re-encoding for speed
             '-movflags +faststart'
-          ])
-          .output(output)
+          ]);
+        }
+
+        concatCommand
           .on('start', (commandLine) => {
             console.log('FFmpeg concat command:', commandLine);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('export-progress', { percent: 80 });
+            }
+          })
+          .on('progress', (progress) => {
+            // Concatenation is the final 20% (80-100%)
+            const concatPercent = progress.percent || 0;
+            const totalPercent = 80 + (concatPercent / 100) * 20;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('export-progress', {
+                percent: Math.round(totalPercent)
+              });
+            }
           })
           .on('end', () => {
             console.log('Concatenation complete');
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('export-progress', { percent: 100 });
+            }
             resolveConcat();
           })
           .on('error', (err) => {
             console.error('Concatenation error:', err);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('export-progress', { percent: 0 });
+            }
             rejectConcat(err);
           })
           .run();

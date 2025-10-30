@@ -216,36 +216,148 @@ export function Timeline({
 
       // Calculate clip duration
       const clipDuration = clip.endTime - clip.startTime;
+      let newEndTime = newStartTime + clipDuration;
 
-      // Snap to other clips when close (within 0.5 seconds)
-      const snapThreshold = 0.5;
-      const otherClips = clips.filter(c => c.id !== movingClip.clipId);
+      // Start with desired position
+      let finalStartTime = newStartTime;
+      let finalEndTime = newEndTime;
 
-      for (const otherClip of otherClips) {
-        // Snap to end of other clip
-        const distToEnd = Math.abs(newStartTime - otherClip.endTime);
-        if (distToEnd < snapThreshold) {
-          newStartTime = otherClip.endTime;
-          break;
+      // Clamp to timeline bounds
+      finalStartTime = Math.max(0, Math.min(finalStartTime, duration - clipDuration));
+      finalEndTime = finalStartTime + clipDuration;
+
+      // Get other clips on same track
+      const otherClips = clips
+        .filter(c => c.id !== movingClip.clipId && c.track === clip.track)
+        .map(c => ({ ...c })); // Create copies we can modify
+
+      const snapThreshold = 0.3;
+
+      // Iteratively resolve all collisions
+      let hasCollisions = true;
+      let iterations = 0;
+      const maxIterations = 10; // Prevent infinite loops
+
+      while (hasCollisions && iterations < maxIterations) {
+        hasCollisions = false;
+        iterations++;
+
+        // Sort by position for chain collision detection
+        otherClips.sort((a, b) => a.startTime - b.startTime);
+
+        // Check if moved clip collides with any other clip
+        for (let i = 0; i < otherClips.length; i++) {
+          const otherClip = otherClips[i];
+          const otherDuration = otherClip.endTime - otherClip.startTime;
+
+          // Check for overlap
+          if (finalStartTime < otherClip.endTime && finalEndTime > otherClip.startTime) {
+            hasCollisions = true;
+
+            // Determine which side to push based on which side has less overlap
+            const overlapFromLeft = Math.min(finalEndTime, otherClip.endTime) - Math.max(finalStartTime, otherClip.startTime);
+            const distanceToLeft = otherClip.startTime - finalStartTime;
+            const distanceToRight = finalEndTime - otherClip.endTime;
+
+            // Prefer pushing in the direction we're moving
+            if (distanceToRight > 0) {
+              // We're moving into it from the left - push it right
+              const newStart = finalEndTime;
+              const newEnd = newStart + otherDuration;
+
+              if (newEnd > duration) {
+                // Can't push right - must go left instead
+                finalStartTime = otherClip.startTime - clipDuration;
+                finalEndTime = otherClip.startTime;
+
+                if (finalStartTime < 0) {
+                  // Can't fit anywhere - abort
+                  return;
+                }
+              } else {
+                otherClip.startTime = newStart;
+                otherClip.endTime = newEnd;
+              }
+            } else {
+              // We're moving into it from the right - push it left
+              const newEnd = finalStartTime;
+              const newStart = newEnd - otherDuration;
+
+              if (newStart < 0) {
+                // Can't push left - must go right instead
+                finalStartTime = otherClip.endTime;
+                finalEndTime = finalStartTime + clipDuration;
+
+                if (finalEndTime > duration) {
+                  // Can't fit anywhere - abort
+                  return;
+                }
+              } else {
+                otherClip.startTime = newStart;
+                otherClip.endTime = newEnd;
+              }
+            }
+          }
         }
 
-        // Snap to start of other clip (align our end with their start)
-        const ourEndTime = newStartTime + clipDuration;
-        const distToStart = Math.abs(ourEndTime - otherClip.startTime);
-        if (distToStart < snapThreshold) {
-          newStartTime = otherClip.startTime - clipDuration;
-          break;
+        // Check for collisions between other clips (chain reactions)
+        for (let i = 0; i < otherClips.length - 1; i++) {
+          const clipA = otherClips[i];
+          const clipB = otherClips[i + 1];
+
+          if (clipA.endTime > clipB.startTime) {
+            hasCollisions = true;
+            // Push B to the right
+            const bDuration = clipB.endTime - clipB.startTime;
+            clipB.startTime = clipA.endTime;
+            clipB.endTime = clipA.endTime + bDuration;
+
+            if (clipB.endTime > duration) {
+              // Hit boundary - abort
+              return;
+            }
+          }
         }
       }
 
-      // Clamp to valid range
-      const clampedStartTime = Math.max(0, Math.min(newStartTime, duration - clipDuration));
-      const clampedEndTime = clampedStartTime + clipDuration;
+      if (iterations >= maxIterations) {
+        // Couldn't resolve collisions - abort
+        return;
+      }
 
+      // Snap to adjacent clips when very close
+      for (const otherClip of otherClips) {
+        if (Math.abs(finalStartTime - otherClip.endTime) < snapThreshold) {
+          finalStartTime = otherClip.endTime;
+          finalEndTime = finalStartTime + clipDuration;
+        }
+        if (Math.abs(finalEndTime - otherClip.startTime) < snapThreshold) {
+          finalEndTime = otherClip.startTime;
+          finalStartTime = finalEndTime - clipDuration;
+        }
+      }
+
+      // Final bounds check
+      finalStartTime = Math.max(0, Math.min(finalStartTime, duration - clipDuration));
+      finalEndTime = finalStartTime + clipDuration;
+
+      // Apply the moved clip update
       onUpdateClip(clip.id, {
-        startTime: clampedStartTime,
-        endTime: clampedEndTime
+        startTime: finalStartTime,
+        endTime: finalEndTime
       });
+
+      // Apply all pushed clip updates
+      for (const otherClip of otherClips) {
+        // Find the original clip to see if it moved
+        const originalClip = clips.find(c => c.id === otherClip.id);
+        if (originalClip && (originalClip.startTime !== otherClip.startTime || originalClip.endTime !== otherClip.endTime)) {
+          onUpdateClip(otherClip.id, {
+            startTime: otherClip.startTime,
+            endTime: otherClip.endTime
+          });
+        }
+      }
     };
 
     const handleMouseUp = () => {
@@ -600,13 +712,6 @@ export function Timeline({
                   const clipWidth = ((clip.endTime - clip.startTime) / duration) * 100;
 
                   const isSelected = clip.id === selectedClipId;
-                  const isDraggedOver = clip.id === dragOverClipId;
-                  const isBeingDragged = clip.id === draggedClipId;
-
-                  // Determine if dragging from left to right or right to left
-                  const draggedIndex = mainClips.findIndex(c => c.id === draggedClipId);
-                  const targetIndex = index;
-                  const isDraggingLeftToRight = draggedIndex !== -1 && draggedIndex < targetIndex;
 
                   return (
                     <React.Fragment key={clip.id}>
@@ -652,10 +757,9 @@ export function Timeline({
                       )}
 
                       <div
-                        draggable={true}
-                        className={`timeline-clip absolute rounded-md cursor-move transition-all ${
+                        className={`timeline-clip absolute rounded-md cursor-move ${
                         isSelected ? 'scale-105' : 'hover:scale-102'
-                      } ${isDraggedOver ? 'scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
+                      }`}
                       style={{
                         left: `${clipStartPos}%`,
                         width: `${clipWidth}%`,
@@ -666,7 +770,11 @@ export function Timeline({
                         boxShadow: isSelected
                           ? '0 4px 12px rgba(251, 191, 36, 0.5), 0 2px 6px rgba(0, 0, 0, 0.2)'
                           : '0 2px 8px rgba(59, 130, 246, 0.3), 0 1px 3px rgba(0, 0, 0, 0.1)',
-                        zIndex: isSelected ? 70 : 60
+                        zIndex: isSelected ? 70 : 60,
+                        // Smooth transition when clips are pushed - but only when not actively moving this clip
+                        transition: movingClip?.clipId === clip.id ? 'none' : 'left 0.2s ease-out, width 0.2s ease-out',
+                        // Make dragged clip semi-transparent
+                        opacity: movingClip?.clipId === clip.id ? 0.6 : 1
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -674,79 +782,8 @@ export function Timeline({
                           onSelectClip(clip.id);
                         }
                       }}
-                      onDragStart={(e) => {
-                        e.stopPropagation();
-                        setDraggedClipId(clip.id);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.dataTransfer.dropEffect = 'move';
-                        if (draggedClipId && draggedClipId !== clip.id) {
-                          // Only show drop indicator if same track
-                          const draggedClip = clips.find(c => c.id === draggedClipId);
-                          const targetClip = clips.find(c => c.id === clip.id);
-                          if (draggedClip && targetClip && draggedClip.track === targetClip.track) {
-                            setDragOverClipId(clip.id);
-                          }
-                        }
-                      }}
-                      onDragLeave={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (dragOverClipId === clip.id) {
-                          setDragOverClipId(null);
-                        }
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (draggedClipId && draggedClipId !== clip.id && onReorderClips) {
-                          // Only allow reordering within the same track
-                          const draggedClip = clips.find(c => c.id === draggedClipId);
-                          const targetClip = clips.find(c => c.id === clip.id);
-                          if (draggedClip && targetClip && draggedClip.track === targetClip.track) {
-                            onReorderClips(draggedClipId, clip.id);
-                          }
-                        }
-                        setDraggedClipId(null);
-                        setDragOverClipId(null);
-                      }}
-                      onDragEnd={(e) => {
-                        e.preventDefault();
-                        setDraggedClipId(null);
-                        setDragOverClipId(null);
-                      }}
                       title={`Clip: ${formatTime(clip.startTime)} - ${formatTime(clip.endTime)}`}
                     >
-                      {/* Drop insertion indicator - large wedge pointing down */}
-                      {isDraggedOver && (
-                        <>
-                          {/* Vertical insertion line */}
-                          <div className={`absolute top-0 bottom-0 w-2 bg-gradient-to-r from-yellow-400 to-yellow-300 shadow-lg ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`} style={{
-                            boxShadow: '0 0 30px rgba(251, 191, 36, 1), -6px 0 30px rgba(251, 191, 36, 0.8)',
-                            zIndex: 100
-                          }} />
-                          {/* Large wedge arrow pointing down */}
-                          <div className={`absolute -top-8 -translate-x-1/2 ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`}>
-                            <div style={{
-                              width: 0,
-                              height: 0,
-                              borderLeft: '20px solid transparent',
-                              borderRight: '20px solid transparent',
-                              borderTop: '24px solid #fbbf24',
-                              filter: 'drop-shadow(0 4px 12px rgba(251, 191, 36, 0.9))'
-                            }} />
-                          </div>
-                          {/* Label */}
-                          <div className={`absolute -top-14 -translate-x-1/2 bg-yellow-400 text-black text-xs font-black px-3 py-1 rounded-full whitespace-nowrap ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`} style={{
-                            boxShadow: '0 0 20px rgba(251, 191, 36, 0.8)'
-                          }}>
-                            DROP HERE
-                          </div>
-                        </>
-                      )}
 
                       <div
                         className="absolute inset-0 flex items-center justify-between px-2 gap-1.5"
