@@ -5,6 +5,8 @@ module.exports = {
   packagerConfig: {
     asar: true,
     appBundleId: 'com.vied.app',
+    // Disable signing - entitlements don't work with unsigned apps anyway
+    osxSign: false,
     extendInfo: {
       NSCameraUsageDescription: 'Vied needs access to your camera to record webcam videos.',
       NSMicrophoneUsageDescription: 'Vied needs access to your microphone to record audio with videos.',
@@ -14,12 +16,19 @@ module.exports = {
   rebuildConfig: {},
   makers: [
     {
-      name: '@electron-forge/maker-squirrel',
-      config: {},
+      name: '@electron-forge/maker-dmg',
+      config: {
+        format: 'ULFO',
+        name: 'Vied',
+      },
     },
     {
       name: '@electron-forge/maker-zip',
       platforms: ['darwin'],
+    },
+    {
+      name: '@electron-forge/maker-squirrel',
+      config: {},
     },
     {
       name: '@electron-forge/maker-deb',

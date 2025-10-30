@@ -1,4 +1,4 @@
-import { Film, ZoomIn, ZoomOut } from "lucide-react";
+import { Film, ZoomIn, ZoomOut, X } from "lucide-react";
 import { useRef, useState, useEffect } from "react";
 import { Slider } from "./ui/slider";
 import { Button } from "./ui/button";
@@ -18,6 +18,7 @@ interface TimelineProps {
   endTime: number;
   clips: Clip[];
   selectedClipId: number | null;
+  editorMode: boolean;
   onSeek?: (time: number) => void;
   onSetStart?: (time: number) => void;
   onSetEnd?: (time: number) => void;
@@ -34,6 +35,7 @@ export function Timeline({
   endTime,
   clips,
   selectedClipId,
+  editorMode,
   onSeek,
   onSetStart,
   onSetEnd,
@@ -86,13 +88,20 @@ export function Timeline({
       const rect = timelineRef.current.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const percentage = Math.max(0, Math.min(1, mouseX / rect.width));
-      const time = percentage * duration;
+      let time = percentage * duration;
+
+      // Snap to 0.1 second increments for smoother control
+      time = Math.round(time * 10) / 10;
 
       if (dragging === 'start') {
-        const newStartTime = Math.min(time, endTime - 0.1);
+        // Minimum clip duration: 1 second (prevents accidental collapse)
+        const minDuration = 1.0;
+        const newStartTime = Math.min(time, endTime - minDuration);
         onSetStart?.(Math.max(0, newStartTime));
       } else if (dragging === 'end') {
-        const newEndTime = Math.max(time, startTime + 0.1);
+        // Minimum clip duration: 1 second
+        const minDuration = 1.0;
+        const newEndTime = Math.max(time, startTime + minDuration);
         onSetEnd?.(Math.min(duration, newEndTime));
       }
     };
@@ -285,13 +294,23 @@ export function Timeline({
     return minDistance <= snapThreshold ? nearestMarker : time;
   };
 
+  // Hide timeline completely when no video is loaded
+  if (!duration || duration === 0) {
+    return null;
+  }
+
+  // QuickTime-style: Hide timeline in viewer mode, only show in editor mode
+  if (!editorMode) {
+    return null;
+  }
+
   return (
-    <div className="flex flex-col h-full bg-[#1c1c1e] border-t border-white/10">
+    <div className="flex flex-col h-full bg-[#1c1c1e] border-t border-white/10 min-h-[400px]">
       {/* Timeline Header */}
-      <div className="flex items-center gap-4 px-4 py-2 bg-[#2c2c2e] border-b border-white/10">
+      <div className="flex items-center gap-3 px-3 py-2 bg-[#2c2c2e] border-b border-white/10">
         <div className="flex items-center gap-2">
-          <Film className="h-4 w-4 text-white/60" />
-          <span className="text-sm text-white/60">Timeline</span>
+          <Film className="h-3.5 w-3.5 text-white/60" />
+          <span className="text-xs text-white/60">Timeline</span>
         </div>
         <div className="flex-1" />
 
@@ -300,11 +319,11 @@ export function Timeline({
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 w-7 p-0 text-white/60 hover:text-white hover:bg-white/10"
+            className="h-6 w-6 p-0 text-white/60 hover:text-white hover:bg-white/10"
             onClick={() => setZoomLevel(Math.max(0.5, zoomLevel - 0.25))}
             title="Zoom out"
           >
-            <ZoomOut className="h-3.5 w-3.5" />
+            <ZoomOut className="h-3 w-3" />
           </Button>
           <Slider
             value={[zoomLevel]}
@@ -312,23 +331,23 @@ export function Timeline({
             min={0.5}
             max={5}
             step={0.1}
-            className="w-24"
+            className="w-20"
           />
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 w-7 p-0 text-white/60 hover:text-white hover:bg-white/10"
+            className="h-6 w-6 p-0 text-white/60 hover:text-white hover:bg-white/10"
             onClick={() => setZoomLevel(Math.min(5, zoomLevel + 0.25))}
             title="Zoom in"
           >
-            <ZoomIn className="h-3.5 w-3.5" />
+            <ZoomIn className="h-3 w-3" />
           </Button>
-          <span className="text-xs text-white/40 tabular-nums w-10">{Math.round(zoomLevel * 100)}%</span>
+          <span className="text-[10px] text-white/40 tabular-nums w-8">{Math.round(zoomLevel * 100)}%</span>
         </div>
 
-        <div className="flex items-center gap-1 text-xs text-white/40 tabular-nums">
+        <div className="flex items-center gap-1 text-[10px] text-white/40 tabular-nums">
           <span>{formatTime(currentTime)}</span>
-          <div className="w-px h-4 bg-white/20 mx-2" />
+          <div className="w-px h-3 bg-white/20 mx-1.5" />
           <span>{formatTime(duration)}</span>
         </div>
       </div>
@@ -336,32 +355,32 @@ export function Timeline({
       {/* Timeline Ruler - Scrollable */}
       <div
         ref={rulerScrollRef}
-        className="relative border-b border-white/10 bg-[#2c2c2e] overflow-x-auto overflow-y-hidden"
+        className="relative border-b-2 border-white/20 bg-[#2c2c2e] overflow-x-auto overflow-y-hidden"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
         <div className="flex">
           {/* Ruler label spacer */}
-          <div className="w-16 flex-shrink-0" />
+          <div className="w-12 flex-shrink-0" />
           {/* Ruler content */}
           <div
             className="cursor-pointer h-8"
-            style={{ width: `calc((100% - 4rem) * ${zoomLevel})` }}
+            style={{ width: `calc((100% - 3rem) * ${zoomLevel})` }}
             onClick={handleTimelineClick}
           >
           <div className="flex h-full">
             {timeMarkers.map((marker, index) => (
               <div
                 key={index}
-                className="flex-1 border-l border-white/10 relative first:border-l-0"
+                className="flex-1 border-l-2 border-white/20 relative first:border-l-0"
               >
-                <span className="absolute top-1 left-1 text-xs text-white/40 tabular-nums pointer-events-none">
+                <span className="absolute top-1 left-1 text-xs text-white/60 tabular-nums pointer-events-none font-medium">
                   {formatTime(marker.time)}
                 </span>
               </div>
             ))}
           </div>
           {/* Playhead on ruler */}
-          <div className="absolute top-0 w-0.5 h-full bg-red-500 z-10 pointer-events-none" style={{ left: `${playheadPosition}%` }}>
+          <div className="absolute top-0 w-1 h-full bg-red-500 z-10 pointer-events-none" style={{ left: `${playheadPosition}%` }}>
             <div className="absolute -top-1 -left-1.5 w-3 h-3 bg-red-500 rounded-sm" />
           </div>
           </div>
@@ -369,31 +388,43 @@ export function Timeline({
       </div>
 
       {/* Tracks Container */}
-      <div ref={trackScrollRef} className="flex-1 overflow-x-auto overflow-y-hidden">
-        <div className="relative w-full h-full">
+      <div ref={trackScrollRef} className="flex-1 overflow-x-auto overflow-y-hidden" style={{ height: '200px' }}>
+        <div className="relative w-full" style={{ height: '200px' }}>
           {/* Main Track Label */}
-          <div className="absolute left-0 top-0 w-16 h-1/2 flex items-center justify-center bg-[#2c2c2e] border-r border-b border-white/10 z-10">
+          <div className="absolute left-0 top-0 w-12 flex items-center justify-center bg-[#2c2c2e] border-r-2 border-b-2 border-white/20 z-10" style={{ height: '100px' }}>
             <div className="flex flex-col items-center gap-1">
-              <Film className="h-4 w-4 text-white/60" />
-              <span className="text-xs text-white/40">Main</span>
+              <Film className="h-5 w-5 text-white/80" />
+              <span className="text-sm text-white/60 font-medium">Main</span>
             </div>
           </div>
 
           {/* Main Track Lane */}
-          <div className="absolute top-0 left-16 h-1/2 bg-[#1c1c1e] border-b border-white/5 relative" style={{ width: `calc((100% - 4rem) * ${zoomLevel})` }}>
+          <div className="absolute top-0 left-12 relative border-b-4" style={{
+            height: '100px',
+            width: `calc((100% - 3rem) * ${zoomLevel})`,
+            backgroundColor: duration > 0 ? '#1a472a' : '#2c2c2e',
+            borderColor: duration > 0 ? '#facc15' : '#ffffff33'
+          }}>
+            {/* Track label - only show when video is loaded */}
+            {duration > 0 && (
+              <div className="absolute top-2 left-4 text-white text-xl font-black z-50 bg-black/50 px-3 py-1 rounded">
+                MAIN TRACK (drag clips here)
+              </div>
+            )}
+
             {/* Empty state message */}
             {!hasVideo && (
-              <div className="absolute inset-0 flex items-center justify-center text-white/40 text-sm">
+              <div className="absolute inset-0 flex items-center justify-center text-white text-lg font-bold z-40">
                 Load a video to begin editing
               </div>
             )}
 
             {/* Background ruler marks */}
-            <div className="absolute inset-0 flex">
+            <div className="absolute inset-0 flex z-0">
               {timeMarkers.map((marker, i) => (
                 <div
                   key={i}
-                  className="flex-1 border-l border-white/5 first:border-l-0"
+                  className="flex-1 border-l-2 border-white/40 first:border-l-0"
                 />
               ))}
             </div>
@@ -422,18 +453,33 @@ export function Timeline({
                   const isDraggedOver = clip.id === dragOverClipId;
                   const isBeingDragged = clip.id === draggedClipId;
 
+                  // Determine if dragging from left to right or right to left
+                  const draggedIndex = mainClips.findIndex(c => c.id === draggedClipId);
+                  const targetIndex = index;
+                  const isDraggingLeftToRight = draggedIndex !== -1 && draggedIndex < targetIndex;
+
                   accumulatedDuration += clipDuration;
 
                   return (
                     <div
                       key={clip.id}
                       draggable={true}
-                      className={`timeline-clip absolute top-3 bottom-3 rounded-md cursor-move border-2 transition-all bg-gradient-to-b from-blue-500 to-blue-600 border-blue-300 shadow-md z-10 ${
-                        isSelected ? 'ring-2 ring-white shadow-xl scale-105' : 'hover:shadow-lg hover:scale-102'
-                      } ${isDraggedOver ? 'ring-2 ring-yellow-400 scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
+                      className={`timeline-clip absolute rounded-lg cursor-move transition-all ${
+                        isSelected ? 'scale-105' : 'hover:scale-102'
+                      } ${isDraggedOver ? 'scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
                       style={{
                         left: `${clipStartPos}%`,
-                        width: `${clipWidth}%`
+                        width: `${clipWidth}%`,
+                        top: '20px',
+                        bottom: '20px',
+                        backgroundColor: isSelected ? '#60a5fa' : '#3b82f6',
+                        border: isSelected ? '8px solid #fbbf24' : '6px solid #60a5fa',
+                        boxShadow: isSelected
+                          ? '0 0 40px rgba(251, 191, 36, 1), 0 0 60px rgba(251, 191, 36, 0.6), inset 0 0 20px rgba(255,255,255,0.3)'
+                          : '0 0 30px rgba(59, 130, 246, 0.8), inset 0 0 15px rgba(255,255,255,0.2)',
+                        zIndex: isSelected ? 70 : 60,
+                        outline: isSelected ? '4px solid #fbbf24' : 'none',
+                        outlineOffset: isSelected ? '4px' : '0'
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -487,41 +533,114 @@ export function Timeline({
                       }}
                       title={`Clip: ${formatTime(clip.startTime)} - ${formatTime(clip.endTime)}`}
                     >
-                      <div className="absolute inset-0 flex items-center px-2 gap-1.5">
-                        <div className="text-white/90 flex-shrink-0">
-                          <Film className="h-3 w-3" />
+                      {/* Drop insertion indicator - large wedge pointing down */}
+                      {isDraggedOver && (
+                        <>
+                          {/* Vertical insertion line */}
+                          <div className={`absolute top-0 bottom-0 w-2 bg-gradient-to-r from-yellow-400 to-yellow-300 shadow-lg ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`} style={{
+                            boxShadow: '0 0 30px rgba(251, 191, 36, 1), -6px 0 30px rgba(251, 191, 36, 0.8)',
+                            zIndex: 100
+                          }} />
+                          {/* Large wedge arrow pointing down */}
+                          <div className={`absolute -top-8 -translate-x-1/2 ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`}>
+                            <div style={{
+                              width: 0,
+                              height: 0,
+                              borderLeft: '20px solid transparent',
+                              borderRight: '20px solid transparent',
+                              borderTop: '24px solid #fbbf24',
+                              filter: 'drop-shadow(0 4px 12px rgba(251, 191, 36, 0.9))'
+                            }} />
+                          </div>
+                          {/* Label */}
+                          <div className={`absolute -top-14 -translate-x-1/2 bg-yellow-400 text-black text-xs font-black px-3 py-1 rounded-full whitespace-nowrap ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`} style={{
+                            boxShadow: '0 0 20px rgba(251, 191, 36, 0.8)'
+                          }}>
+                            DROP HERE
+                          </div>
+                        </>
+                      )}
+
+                      <div className="absolute inset-0 flex items-center justify-between px-2 gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <div className="text-white/90 flex-shrink-0">
+                            <Film className="h-3 w-3" />
+                          </div>
+                          <span className="text-xs text-white/90 truncate">
+                            {formatTime(clip.endTime - clip.startTime)}
+                          </span>
                         </div>
-                        <span className="text-xs text-white/90 truncate">
-                          {formatTime(clip.endTime - clip.startTime)}
-                        </span>
+                        {/* Delete button */}
+                        {isSelected && onDeleteClip && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteClip(clip.id);
+                            }}
+                            className="p-0.5 bg-red-500 hover:bg-red-600 rounded-sm transition-colors flex-shrink-0"
+                            title="Delete clip"
+                          >
+                            <X className="h-3 w-3 text-white" />
+                          </button>
+                        )}
                       </div>
 
-                      {/* Resize handles */}
+                      {/* Resize handles - QuickTime-style circular handles (SAME as unsplit video) */}
                       {isSelected && (
                         <>
-                          {/* Left resize handle */}
+                          {/* Left resize handle - IN point - QuickTime style */}
                           <div
-                            className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize bg-white/30 hover:bg-white/60 transition-colors border-r border-white/50 flex items-center justify-center"
+                            className="absolute top-0 bottom-0 cursor-ew-resize"
+                            style={{
+                              left: '0px',
+                              width: '6px',
+                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
+                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
+                              borderRadius: '3px',
+                              zIndex: 999
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
                               setResizingClip({ clipId: clip.id, edge: 'left' });
                             }}
-                            title="Drag to trim start"
+                            title="◀ Drag to trim IN point"
                           >
-                            <div className="w-0.5 h-6 bg-white/80 rounded-full" />
+                            {/* Circular handle - solid gray, stays within bounds */}
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                              left: '15px',
+                              backgroundColor: '#9ca3af',
+                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                            }}>
+                              <span className="text-black text-xs font-black">IN</span>
+                            </div>
                           </div>
-                          {/* Right resize handle */}
+                          {/* Right resize handle - OUT point - QuickTime style */}
                           <div
-                            className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize bg-white/30 hover:bg-white/60 transition-colors border-l border-white/50 flex items-center justify-center"
+                            className="absolute top-0 bottom-0 cursor-ew-resize"
+                            style={{
+                              right: '0px',
+                              width: '6px',
+                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
+                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
+                              borderRadius: '3px',
+                              zIndex: 999
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
                               setResizingClip({ clipId: clip.id, edge: 'right' });
                             }}
-                            title="Drag to trim end"
+                            title="Drag to trim OUT point ▶"
                           >
-                            <div className="w-0.5 h-6 bg-white/80 rounded-full" />
+                            {/* Circular handle - solid gray, stays within bounds */}
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                              right: '15px',
+                              backgroundColor: '#9ca3af',
+                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                            }}>
+                              <span className="text-black text-xs font-black">OUT</span>
+                            </div>
                           </div>
                         </>
                       )}
@@ -530,60 +649,142 @@ export function Timeline({
                 });
               })()}
 
-              {/* Video block - show full video as a solid bar when no clips exist */}
-              {clips && clips.filter(c => c.track === 'main').length === 0 && duration > 0 && (
-                <div
-                  className="absolute inset-y-2 rounded-md border-2 bg-gradient-to-b from-green-500 to-green-600 border-green-300 shadow-lg cursor-pointer z-10"
-                  style={{
-                    left: '0%',
-                    width: '100%'
-                  }}
-                  title={`Full Video: ${formatTime(duration)}`}
-                >
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-sm font-semibold text-white">MAIN VIDEO</span>
+              {/* QuickTime-style trim interface - Only show when video is loaded but no clips exist */}
+              {duration > 0 && (!clips || clips.filter(c => c.track === 'main').length === 0) && (
+                <>
+                  {/* Full video bar (gray background) */}
+                  <div
+                    className="absolute rounded"
+                    style={{
+                      left: '0%',
+                      width: '100%',
+                      top: '35px',
+                      bottom: '35px',
+                      backgroundColor: '#6b7280',
+                      border: '2px solid #9ca3af',
+                      zIndex: 50
+                    }}
+                    title={`Full Video: ${formatTime(duration)}`}
+                  />
+
+                  {/* Dimmed region BEFORE trim (discarded) */}
+                  {startTime > 0 && (
+                    <div
+                      className="absolute rounded-l"
+                      style={{
+                        left: '0%',
+                        width: `${startPosition}%`,
+                        top: '35px',
+                        bottom: '35px',
+                        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                        border: '2px solid rgba(0, 0, 0, 0.4)',
+                        zIndex: 55
+                      }}
+                    />
+                  )}
+
+                  {/* Dimmed region AFTER trim (discarded) */}
+                  {endTime < duration && (
+                    <div
+                      className="absolute rounded-r"
+                      style={{
+                        left: `${endPosition}%`,
+                        width: `${100 - endPosition}%`,
+                        top: '35px',
+                        bottom: '35px',
+                        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                        border: '2px solid rgba(0, 0, 0, 0.4)',
+                        zIndex: 55
+                      }}
+                    />
+                  )}
+
+                  {/* Gray trim region (what will be kept) */}
+                  <div
+                    className="absolute pointer-events-none"
+                    style={{
+                      left: `${startPosition}%`,
+                      width: `${trimWidth}%`,
+                      top: '35px',
+                      bottom: '35px',
+                      backgroundColor: 'transparent',
+                      border: '4px solid #9ca3af',
+                      boxShadow: '0 0 20px rgba(156, 163, 175, 0.6), inset 0 0 30px rgba(156, 163, 175, 0.2)',
+                      zIndex: 60
+                    }}
+                    title={`Trimmed Selection: ${formatTime(startTime)} - ${formatTime(endTime)} (${formatTime(endTime - startTime)})`}
+                  >
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 pointer-events-none">
+                      <span className="text-sm font-bold text-white bg-black/80 px-3 py-1 rounded shadow-lg">
+                        {formatTime(endTime - startTime)}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                </>
               )}
 
-              {/* Trim region overlay - subtle when clips exist */}
-              {clips && clips.filter(c => c.track === 'main').length > 0 && (
+
+              {/* Start marker (IN point) - QuickTime style - ONLY show when no clips exist */}
+              {(!clips || clips.filter(c => c.track === 'main').length === 0) && (
                 <div
-                  className="absolute top-0 bottom-0 bg-blue-500/20 border-l-2 border-r-2 border-blue-400/50 pointer-events-none z-0"
+                  className="absolute top-0 bottom-0 cursor-ew-resize trim-marker"
                   style={{
                     left: `${startPosition}%`,
-                    width: `${trimWidth}%`
+                    width: '6px',
+                    background: 'linear-gradient(to right, #9ca3af, #6b7280)',
+                    boxShadow: '0 0 15px rgba(156, 163, 175, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
+                    borderRadius: '3px',
+                    zIndex: dragging === 'start' ? 1000 : 900
                   }}
-                />
-              )}
-
-              {/* Start marker (IN point) */}
-              {startTime > 0 && (
-                <div
-                  className={`absolute top-0 bottom-0 w-1 bg-green-500 cursor-ew-resize trim-marker ${dragging === 'start' ? 'z-30' : 'z-20'}`}
-                  style={{ left: `${startPosition}%` }}
                   onMouseDown={(e) => handleMarkerMouseDown('start', e)}
+                  title="◀ Drag to set IN point"
                 >
-                  <div className="absolute -top-1 left-1/2 -translate-x-1/2 px-1.5 py-0.5 bg-green-500 text-white text-xs rounded whitespace-nowrap">
-                    IN
+                  {/* Top handle - solid gray, stays within bounds */}
+                  <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                    left: '15px',
+                    backgroundColor: '#9ca3af',
+                    boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                  }}>
+                    <span className="text-black text-xs font-black">IN</span>
                   </div>
-                  <div className="absolute top-6 left-1/2 -translate-x-1/2 px-1 py-0.5 bg-black/60 text-white text-xs rounded tabular-nums whitespace-nowrap">
+                  {/* Time label */}
+                  <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
+                    left: '15px',
+                    backgroundColor: '#9ca3af'
+                  }}>
                     {formatTime(startTime)}
                   </div>
                 </div>
               )}
 
-              {/* End marker (OUT point) */}
-              {endTime < duration && (
+              {/* End marker (OUT point) - QuickTime style - ONLY show when no clips exist */}
+              {(!clips || clips.filter(c => c.track === 'main').length === 0) && (
                 <div
-                  className={`absolute top-0 bottom-0 w-1 bg-red-500 cursor-ew-resize trim-marker ${dragging === 'end' ? 'z-30' : 'z-20'}`}
-                  style={{ left: `${endPosition}%` }}
+                  className="absolute top-0 bottom-0 cursor-ew-resize trim-marker"
+                  style={{
+                    left: `${endPosition}%`,
+                    width: '6px',
+                    background: 'linear-gradient(to right, #9ca3af, #6b7280)',
+                    boxShadow: '0 0 15px rgba(156, 163, 175, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
+                    borderRadius: '3px',
+                    zIndex: dragging === 'end' ? 1000 : 900
+                  }}
                   onMouseDown={(e) => handleMarkerMouseDown('end', e)}
+                  title="Drag to set OUT point ▶"
                 >
-                  <div className="absolute -top-1 left-1/2 -translate-x-1/2 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded whitespace-nowrap">
-                    OUT
+                  {/* Top handle - solid gray, stays within bounds */}
+                  <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                    right: '15px',
+                    backgroundColor: '#9ca3af',
+                    boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                  }}>
+                    <span className="text-black text-xs font-black">OUT</span>
                   </div>
-                  <div className="absolute top-6 left-1/2 -translate-x-1/2 px-1 py-0.5 bg-black/60 text-white text-xs rounded tabular-nums whitespace-nowrap">
+                  {/* Time label */}
+                  <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
+                    right: '15px',
+                    backgroundColor: '#9ca3af'
+                  }}>
                     {formatTime(endTime)}
                   </div>
                 </div>
@@ -591,30 +792,49 @@ export function Timeline({
 
               {/* Playhead */}
               <div
-                className="absolute top-0 w-0.5 h-full bg-red-500 z-10 pointer-events-none"
-                style={{ left: `${playheadPosition}%` }}
+                className="absolute top-0 h-full pointer-events-none"
+                style={{
+                  left: `${playheadPosition}%`,
+                  width: '4px',
+                  backgroundColor: '#ef4444',
+                  boxShadow: '0 0 20px rgba(239, 68, 68, 0.9)',
+                  zIndex: 100
+                }}
               >
-                <div className="absolute -top-1 -left-1.5 w-3 h-3 bg-red-500 rounded-sm" />
+                <div className="absolute -top-2 -left-2 w-8 h-8 bg-red-500 rounded-full border-4 border-white shadow-xl" />
               </div>
             </div>
           </div>
 
           {/* Overlay Track Label */}
-          <div className="absolute left-0 bottom-0 w-16 h-1/2 flex items-center justify-center bg-[#2c2c2e] border-r border-b border-white/10 z-10">
+          <div className="absolute left-0 w-12 flex items-center justify-center bg-[#2c2c2e] border-r-2 border-b-2 border-white/20 z-10" style={{ top: '100px', height: '100px' }}>
             <div className="flex flex-col items-center gap-1">
-              <Film className="h-4 w-4 text-white/60" />
-              <span className="text-xs text-white/40">PiP</span>
+              <Film className="h-5 w-5 text-white/80" />
+              <span className="text-sm text-white/60 font-medium">PiP</span>
             </div>
           </div>
 
           {/* Overlay Track Lane */}
-          <div className="absolute bottom-0 left-16 h-1/2 bg-[#1c1c1e]/50 border-b border-white/5 relative" style={{ width: `calc((100% - 4rem) * ${zoomLevel})` }}>
+          <div className="absolute left-12 relative border-b-4" style={{
+            top: '100px',
+            height: '100px',
+            width: `calc((100% - 3rem) * ${zoomLevel})`,
+            backgroundColor: duration > 0 ? '#2d1b4e' : '#2c2c2e',
+            borderColor: duration > 0 ? '#c084fc' : '#ffffff33'
+          }}>
+            {/* Track label - only show when video is loaded */}
+            {duration > 0 && (
+              <div className="absolute top-2 left-4 text-white text-xl font-black z-50 bg-black/50 px-3 py-1 rounded">
+                PIP TRACK (overlay videos)
+              </div>
+            )}
+
             {/* Background ruler marks */}
-            <div className="absolute inset-0 flex">
+            <div className="absolute inset-0 flex z-0">
               {timeMarkers.map((marker, i) => (
                 <div
                   key={i}
-                  className="flex-1 border-l border-white/5 first:border-l-0"
+                  className="flex-1 border-l-2 border-white/40 first:border-l-0"
                 />
               ))}
             </div>
@@ -642,18 +862,33 @@ export function Timeline({
                   const isDraggedOver = clip.id === dragOverClipId;
                   const isBeingDragged = clip.id === draggedClipId;
 
+                  // Determine if dragging from left to right or right to left
+                  const draggedIndex = overlayClips.findIndex(c => c.id === draggedClipId);
+                  const targetIndex = index;
+                  const isDraggingLeftToRight = draggedIndex !== -1 && draggedIndex < targetIndex;
+
                   accumulatedDuration += clipDuration;
 
                   return (
                     <div
                       key={clip.id}
                       draggable={true}
-                      className={`timeline-clip absolute top-3 bottom-3 rounded-md cursor-move border-2 transition-all bg-gradient-to-b from-purple-500 to-purple-600 border-purple-300 shadow-md z-10 ${
-                        isSelected ? 'ring-2 ring-white shadow-xl scale-105' : 'hover:shadow-lg hover:scale-102'
-                      } ${isDraggedOver ? 'ring-2 ring-yellow-400 scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
+                      className={`timeline-clip absolute rounded-lg cursor-move transition-all ${
+                        isSelected ? 'scale-105' : 'hover:scale-102'
+                      } ${isDraggedOver ? 'scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
                       style={{
                         left: `${clipStartPos}%`,
-                        width: `${clipWidth}%`
+                        width: `${clipWidth}%`,
+                        top: '20px',
+                        bottom: '20px',
+                        backgroundColor: isSelected ? '#c084fc' : '#a855f7',
+                        border: isSelected ? '8px solid #fbbf24' : '6px solid #c084fc',
+                        boxShadow: isSelected
+                          ? '0 0 40px rgba(251, 191, 36, 1), 0 0 60px rgba(251, 191, 36, 0.6), inset 0 0 20px rgba(255,255,255,0.3)'
+                          : '0 0 30px rgba(168, 85, 247, 0.8), inset 0 0 15px rgba(255,255,255,0.2)',
+                        zIndex: isSelected ? 70 : 60,
+                        outline: isSelected ? '4px solid #fbbf24' : 'none',
+                        outlineOffset: isSelected ? '4px' : '0'
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -707,41 +942,114 @@ export function Timeline({
                       }}
                       title={`PiP Clip: ${formatTime(clip.startTime)} - ${formatTime(clip.endTime)}`}
                     >
-                      <div className="absolute inset-0 flex items-center px-2 gap-1.5">
-                        <div className="text-white/90 flex-shrink-0">
-                          <Film className="h-3 w-3" />
+                      {/* Drop insertion indicator - large wedge pointing down */}
+                      {isDraggedOver && (
+                        <>
+                          {/* Vertical insertion line */}
+                          <div className={`absolute top-0 bottom-0 w-2 bg-gradient-to-r from-yellow-400 to-yellow-300 shadow-lg ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`} style={{
+                            boxShadow: '0 0 30px rgba(251, 191, 36, 1), -6px 0 30px rgba(251, 191, 36, 0.8)',
+                            zIndex: 100
+                          }} />
+                          {/* Large wedge arrow pointing down */}
+                          <div className={`absolute -top-8 -translate-x-1/2 ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`}>
+                            <div style={{
+                              width: 0,
+                              height: 0,
+                              borderLeft: '20px solid transparent',
+                              borderRight: '20px solid transparent',
+                              borderTop: '24px solid #fbbf24',
+                              filter: 'drop-shadow(0 4px 12px rgba(251, 191, 36, 0.9))'
+                            }} />
+                          </div>
+                          {/* Label */}
+                          <div className={`absolute -top-14 -translate-x-1/2 bg-yellow-400 text-black text-xs font-black px-3 py-1 rounded-full whitespace-nowrap ${isDraggingLeftToRight ? '-right-3' : '-left-3'}`} style={{
+                            boxShadow: '0 0 20px rgba(251, 191, 36, 0.8)'
+                          }}>
+                            DROP HERE
+                          </div>
+                        </>
+                      )}
+
+                      <div className="absolute inset-0 flex items-center justify-between px-2 gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <div className="text-white/90 flex-shrink-0">
+                            <Film className="h-3 w-3" />
+                          </div>
+                          <span className="text-xs text-white/90 truncate">
+                            {formatTime(clip.endTime - clip.startTime)}
+                          </span>
                         </div>
-                        <span className="text-xs text-white/90 truncate">
-                          {formatTime(clip.endTime - clip.startTime)}
-                        </span>
+                        {/* Delete button */}
+                        {isSelected && onDeleteClip && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteClip(clip.id);
+                            }}
+                            className="p-0.5 bg-red-500 hover:bg-red-600 rounded-sm transition-colors flex-shrink-0"
+                            title="Delete clip"
+                          >
+                            <X className="h-3 w-3 text-white" />
+                          </button>
+                        )}
                       </div>
 
-                      {/* Resize handles */}
+                      {/* Resize handles - QuickTime-style circular handles (SAME as unsplit video) */}
                       {isSelected && (
                         <>
-                          {/* Left resize handle */}
+                          {/* Left resize handle - IN point - QuickTime style */}
                           <div
-                            className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize bg-white/30 hover:bg-white/60 transition-colors border-r border-white/50 flex items-center justify-center"
+                            className="absolute top-0 bottom-0 cursor-ew-resize"
+                            style={{
+                              left: '0px',
+                              width: '6px',
+                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
+                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
+                              borderRadius: '3px',
+                              zIndex: 999
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
                               setResizingClip({ clipId: clip.id, edge: 'left' });
                             }}
-                            title="Drag to trim start"
+                            title="◀ Drag to trim IN point"
                           >
-                            <div className="w-0.5 h-6 bg-white/80 rounded-full" />
+                            {/* Circular handle - solid gray, stays within bounds */}
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                              left: '15px',
+                              backgroundColor: '#9ca3af',
+                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                            }}>
+                              <span className="text-black text-xs font-black">IN</span>
+                            </div>
                           </div>
-                          {/* Right resize handle */}
+                          {/* Right resize handle - OUT point - QuickTime style */}
                           <div
-                            className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize bg-white/30 hover:bg-white/60 transition-colors border-l border-white/50 flex items-center justify-center"
+                            className="absolute top-0 bottom-0 cursor-ew-resize"
+                            style={{
+                              right: '0px',
+                              width: '6px',
+                              background: 'linear-gradient(to right, #fbbf24, #f59e0b)',
+                              boxShadow: '0 0 15px rgba(251, 191, 36, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
+                              borderRadius: '3px',
+                              zIndex: 999
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
                               setResizingClip({ clipId: clip.id, edge: 'right' });
                             }}
-                            title="Drag to trim end"
+                            title="Drag to trim OUT point ▶"
                           >
-                            <div className="w-0.5 h-6 bg-white/80 rounded-full" />
+                            {/* Circular handle - solid gray, stays within bounds */}
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                              right: '15px',
+                              backgroundColor: '#9ca3af',
+                              boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
+                            }}>
+                              <span className="text-black text-xs font-black">OUT</span>
+                            </div>
                           </div>
                         </>
                       )}
@@ -752,10 +1060,16 @@ export function Timeline({
 
               {/* Playhead (overlay track) */}
               <div
-                className="absolute top-0 w-0.5 h-full bg-red-500 z-10 pointer-events-none"
-                style={{ left: `${playheadPosition}%` }}
+                className="absolute top-0 h-full pointer-events-none"
+                style={{
+                  left: `${playheadPosition}%`,
+                  width: '4px',
+                  backgroundColor: '#ef4444',
+                  boxShadow: '0 0 20px rgba(239, 68, 68, 0.9)',
+                  zIndex: 100
+                }}
               >
-                <div className="absolute -top-1 -left-1.5 w-3 h-3 bg-red-500 rounded-sm" />
+                <div className="absolute -top-2 -left-2 w-8 h-8 bg-red-500 rounded-full border-4 border-white shadow-xl" />
               </div>
             </div>
           </div>
@@ -763,7 +1077,7 @@ export function Timeline({
       </div>
 
       {/* Timeline Info */}
-      <div className="px-4 py-2 bg-[#2c2c2e] border-t border-white/10 flex items-center gap-4 text-xs text-white/60">
+      <div className="px-4 py-2 bg-[#2c2c2e] border-t-2 border-white/20 flex items-center gap-4 text-sm text-white/80 font-medium">
         <span className="tabular-nums">Current: {formatTime(currentTime)}</span>
         {(startTime > 0 || endTime < duration) && (
           <>

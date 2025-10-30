@@ -221,16 +221,21 @@ export function InspectorPanel({
                     Set OUT (at {formatTimeDisplay(currentTime)})
                   </Button>
 
+                  {/* Split - Advanced multi-clip editing feature */}
                   <Button
                     size="sm"
                     variant="outline"
-                    className="w-full justify-start gap-2"
+                    className="w-full justify-start gap-2 bg-purple-50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-800 hover:bg-purple-100 dark:hover:bg-purple-900/30"
                     onClick={onSplit}
                     disabled={!duration || currentTime <= startTime || currentTime >= endTime}
+                    title="Split the current trim into two separate clips at the playhead position"
                   >
                     <Scissors className="h-3.5 w-3.5" />
                     Split at {formatTimeDisplay(currentTime)}
                   </Button>
+                  <p className="text-xs text-black/50 dark:text-white/40 italic">
+                    Creates multiple clips from your current trim selection
+                  </p>
                 </div>
               </div>
 

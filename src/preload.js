@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('electron', {
   checkCameraPermission: () => ipcRenderer.invoke('check-camera-permission'),
   requestCameraPermission: () => ipcRenderer.invoke('request-camera-permission'),
 
+  // FFmpeg-based camera recording
+  getCameraDevices: () => ipcRenderer.invoke('get-camera-devices'),
+  startFfmpegRecording: (params) => ipcRenderer.invoke('start-ffmpeg-recording', params),
+  stopFfmpegRecording: () => ipcRenderer.invoke('stop-ffmpeg-recording'),
+
   // Thumbnail generation
   generateThumbnail: (filePath) => ipcRenderer.invoke('generate-thumbnail', filePath),
 });

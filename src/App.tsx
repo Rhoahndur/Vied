@@ -72,6 +72,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+  const [editorMode, setEditorMode] = useState(false); // QuickTime-style: false = viewer, true = editor
   const seekFunctionRef = useRef<((time: number) => void) | null>(null);
 
   // Load recent files from localStorage on mount
@@ -156,6 +157,22 @@ export default function App() {
     setCurrentTime(time);
   };
 
+  // Auto-select clip when playhead moves over it
+  useEffect(() => {
+    if (clips.length === 0) return;
+
+    // Find which clip the playhead is currently over
+    const clipUnderPlayhead = clips.find(
+      clip => currentTime >= clip.startTime && currentTime < clip.endTime
+    );
+
+    if (clipUnderPlayhead && clipUnderPlayhead.id !== selectedClipId) {
+      setSelectedClipId(clipUnderPlayhead.id);
+      setStartTime(clipUnderPlayhead.startTime);
+      setEndTime(clipUnderPlayhead.endTime);
+    }
+  }, [currentTime, clips]);
+
   const handleSeekReady = (seekFunction: (time: number) => void) => {
     seekFunctionRef.current = seekFunction;
   };
@@ -177,46 +194,81 @@ export default function App() {
   const handleResetTrim = () => {
     setStartTime(0);
     setEndTime(duration);
+    setClips([]); // Also clear any clips
+    setSelectedClipId(null);
   };
 
   const handleSplitClip = () => {
-    if (!videoPath || currentTime <= startTime || currentTime >= endTime) {
-      return;
+    if (!videoPath) return;
+
+    // If no clips exist, split the main video between startTime and endTime
+    if (clips.length === 0) {
+      if (currentTime <= startTime || currentTime >= endTime) {
+        return;
+      }
+
+      const newClips: Clip[] = [
+        {
+          id: Date.now(),
+          startTime: startTime,
+          endTime: currentTime,
+          videoPath: videoPath,
+          track: 'main'
+        },
+        {
+          id: Date.now() + 1,
+          startTime: currentTime,
+          endTime: endTime,
+          videoPath: videoPath,
+          track: 'main'
+        }
+      ];
+
+      setClips(newClips);
+      setSelectedClipId(newClips[0].id);
+      setStartTime(newClips[0].startTime);
+      setEndTime(newClips[0].endTime);
+    } else {
+      // If clips exist, split the selected clip
+      const selectedClip = clips.find(c => c.id === selectedClipId);
+      if (!selectedClip) {
+        console.log('No clip selected for splitting');
+        return;
+      }
+
+      // Check if playhead is within the selected clip's bounds
+      if (currentTime <= selectedClip.startTime || currentTime >= selectedClip.endTime) {
+        console.log('Playhead not within selected clip bounds');
+        return;
+      }
+
+      const newClips: Clip[] = [
+        {
+          id: Date.now(),
+          startTime: selectedClip.startTime,
+          endTime: currentTime,
+          videoPath: videoPath,
+          track: selectedClip.track
+        },
+        {
+          id: Date.now() + 1,
+          startTime: currentTime,
+          endTime: selectedClip.endTime,
+          videoPath: videoPath,
+          track: selectedClip.track
+        }
+      ];
+
+      // Replace the selected clip with the two new clips
+      const clipIndex = clips.findIndex(c => c.id === selectedClipId);
+      const newClipsList = [...clips];
+      newClipsList.splice(clipIndex, 1, ...newClips);
+
+      setClips(newClipsList);
+      setSelectedClipId(newClips[0].id);
+      setStartTime(newClips[0].startTime);
+      setEndTime(newClips[0].endTime);
     }
-
-    const newClips: Clip[] = [
-      {
-        id: Date.now(),
-        startTime: startTime,
-        endTime: currentTime,
-        videoPath: videoPath,
-        track: 'main'
-      },
-      {
-        id: Date.now() + 1,
-        startTime: currentTime,
-        endTime: endTime,
-        videoPath: videoPath,
-        track: 'main'
-      }
-    ];
-
-    setClips(prevClips => {
-      if (prevClips.length === 0) {
-        return newClips;
-      } else {
-        const clipIndex = prevClips.findIndex(c => c.id === selectedClipId);
-        if (clipIndex === -1) return prevClips;
-
-        const newClipsList = [...prevClips];
-        newClipsList.splice(clipIndex, 1, ...newClips);
-        return newClipsList;
-      }
-    });
-
-    setSelectedClipId(newClips[0].id);
-    setStartTime(newClips[0].startTime);
-    setEndTime(newClips[0].endTime);
   };
 
   const handleSelectClip = (clipId: number) => {
@@ -424,6 +476,8 @@ export default function App() {
         duration={duration}
         clips={clips}
         disabled={!videoPath}
+        editorMode={editorMode}
+        onToggleEditorMode={() => setEditorMode(!editorMode)}
       />
 
       {/* Main Content Area */}
@@ -463,6 +517,7 @@ export default function App() {
                   endTime={endTime}
                   clips={clips}
                   selectedClipId={selectedClipId}
+                  editorMode={editorMode}
                   onSeek={handleSeek}
                   onSetStart={handleSetStart}
                   onSetEnd={handleSetEnd}

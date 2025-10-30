@@ -49,6 +49,16 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
+// Enable hardware acceleration and video encoding for MediaRecorder
+// These flags help enable video encoding support in Chromium/Electron
+app.commandLine.appendSwitch('enable-features', 'VaapiVideoEncoder,VaapiVideoDecoder,WebRTCPipeWireCapturer');
+app.commandLine.appendSwitch('enable-hardware-acceleration');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+
+console.log('Enabled hardware acceleration and video encoding flags');
+
 let mainWindow;
 
 const createWindow = () => {
@@ -583,21 +593,8 @@ ipcMain.handle('request-camera-permission', async () => {
 ipcMain.handle('get-sources', async () => {
   console.log('get-sources handler called');
   try {
-    // Check screen recording permission on macOS
-    if (process.platform === 'darwin') {
-      const status = systemPreferences.getMediaAccessStatus('screen');
-      console.log('Screen recording permission status:', status);
-
-      if (status === 'denied') {
-        throw new Error('Screen recording permission denied. Please enable it in System Settings > Privacy & Security > Screen Recording.');
-      }
-
-      if (status === 'not-determined') {
-        // First time - this will trigger the system permission dialog
-        console.log('Screen recording permission not determined, will be requested on first capture');
-      }
-    }
-
+    // Note: systemPreferences.getMediaAccessStatus('screen') can be unreliable
+    // Let desktopCapturer handle permission requests directly
     const sources = await desktopCapturer.getSources({
       types: ['window', 'screen'],
       thumbnailSize: { width: 150, height: 150 }
@@ -615,9 +612,10 @@ ipcMain.handle('get-sources', async () => {
     }));
   } catch (error) {
     console.error('Error getting sources:', error);
-    // Provide more helpful error message
-    if (error.message === 'Failed to get sources.') {
-      throw new Error('Screen recording permission denied. Please enable screen recording permission in System Settings > Privacy & Security > Screen Recording, then quit and restart Vied.');
+    // Provide helpful error message for permission issues
+    const errorMessage = error?.message || String(error);
+    if (errorMessage.includes('Failed to get sources') || errorMessage.includes('denied')) {
+      throw new Error('Screen recording permission denied. Please enable screen recording permission in System Settings > Privacy & Security > Screen Recording, add Vied to the list, then FULLY QUIT and restart Vied (Cmd+Q, not just close window).');
     }
     throw error;
   }
@@ -692,6 +690,195 @@ ipcMain.handle('save-recording', async (event, buffer) => {
     console.error('Error saving recording:', error);
     throw error;
   }
+});
+
+// FFmpeg-based webcam recording - list available devices
+ipcMain.handle('get-camera-devices', async () => {
+  console.log('get-camera-devices handler called');
+  return new Promise((resolve, reject) => {
+    // On macOS, list devices by running: ffmpeg -f avfoundation -list_devices true -i ""
+    // This will error, but stderr contains the device list
+    const { spawn } = require('child_process');
+
+    // Find ffmpeg path
+    let ffmpegPath = '/opt/homebrew/bin/ffmpeg'; // Default
+    for (const path of possiblePaths) {
+      if (fs.existsSync(path)) {
+        ffmpegPath = path;
+        break;
+      }
+    }
+
+    const ffmpegProcess = spawn(ffmpegPath, [
+      '-f', 'avfoundation',
+      '-list_devices', 'true',
+      '-i', ''
+    ]);
+
+    let stderr = '';
+
+    ffmpegProcess.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    ffmpegProcess.on('close', () => {
+      console.log('FFmpeg device list stderr:', stderr);
+
+      // Parse device list from stderr
+      // Format: [AVFoundation indev @ 0x...] AVFoundation video devices:
+      // [AVFoundation indev @ 0x...] [0] FaceTime HD Camera
+      const videoDevices = [];
+      const lines = stderr.split('\n');
+      let inVideoSection = false;
+
+      for (const line of lines) {
+        if (line.includes('AVFoundation video devices:')) {
+          inVideoSection = true;
+          continue;
+        }
+        if (line.includes('AVFoundation audio devices:')) {
+          inVideoSection = false;
+        }
+        if (inVideoSection && line.includes('[') && line.includes(']')) {
+          const match = line.match(/\[(\d+)\] (.+)/);
+          if (match) {
+            videoDevices.push({
+              index: match[1],
+              name: match[2].trim()
+            });
+          }
+        }
+      }
+
+      console.log('Found video devices:', videoDevices);
+
+      if (videoDevices.length === 0) {
+        reject(new Error('No camera devices found. Make sure a camera is connected.'));
+      } else {
+        resolve(videoDevices);
+      }
+    });
+
+    ffmpegProcess.on('error', (err) => {
+      console.error('Error spawning ffmpeg:', err);
+      reject(err);
+    });
+  });
+});
+
+// Store active FFmpeg recording process
+let activeRecordingProcess = null;
+
+// FFmpeg-based webcam recording - start recording
+ipcMain.handle('start-ffmpeg-recording', async (event, { deviceIndex, outputPath }) => {
+  console.log(`start-ffmpeg-recording handler called: device ${deviceIndex}, output: ${outputPath}`);
+
+  return new Promise((resolve, reject) => {
+    // Find ffmpeg path
+    let ffmpegPath = null;
+    for (const path of possiblePaths) {
+      if (fs.existsSync(path)) {
+        ffmpegPath = path;
+        console.log('Using ffmpeg at:', ffmpegPath);
+        break;
+      }
+    }
+
+    if (!ffmpegPath) {
+      reject(new Error('FFmpeg not found. Please install FFmpeg: brew install ffmpeg'));
+      return;
+    }
+
+    // Record from camera using AVFoundation
+    // Format: ffmpeg -f avfoundation -framerate 30 -i "0:0" -c:v libx264 -c:a aac output.mp4
+    const inputDevice = `${deviceIndex}:0`;  // video:audio
+
+    const args = [
+      '-f', 'avfoundation',
+      '-framerate', '30',
+      '-video_size', '1280x720',
+      '-i', inputDevice,
+      '-c:v', 'libx264',
+      '-c:a', 'aac',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      outputPath
+    ];
+
+    console.log('FFmpeg command:', ffmpegPath, args.join(' '));
+
+    const { spawn } = require('child_process');
+    const ffmpegProcess = spawn(ffmpegPath, args);
+
+    let stderr = '';
+
+    ffmpegProcess.stdout.on('data', (data) => {
+      console.log('FFmpeg stdout:', data.toString());
+    });
+
+    ffmpegProcess.stderr.on('data', (data) => {
+      stderr += data.toString();
+      // FFmpeg outputs progress to stderr
+      const output = data.toString();
+      if (output.includes('frame=') || output.includes('time=')) {
+        console.log('FFmpeg progress:', output.trim());
+      }
+    });
+
+    ffmpegProcess.on('spawn', () => {
+      console.log('FFmpeg process spawned successfully');
+      activeRecordingProcess = ffmpegProcess;
+      resolve({ success: true });
+    });
+
+    ffmpegProcess.on('error', (err) => {
+      console.error('FFmpeg process error:', err);
+      activeRecordingProcess = null;
+      reject(new Error(`Failed to start FFmpeg: ${err.message}`));
+    });
+
+    ffmpegProcess.on('close', (code) => {
+      console.log(`FFmpeg process exited with code ${code}`);
+      if (code !== 0 && code !== null) {
+        console.error('FFmpeg stderr:', stderr);
+      }
+      activeRecordingProcess = null;
+    });
+  });
+});
+
+// FFmpeg-based webcam recording - stop recording
+ipcMain.handle('stop-ffmpeg-recording', async () => {
+  console.log('stop-ffmpeg-recording handler called');
+
+  return new Promise((resolve) => {
+    if (activeRecordingProcess) {
+      console.log('Sending SIGINT to FFmpeg process for clean stop...');
+
+      // Listen for the process to exit
+      activeRecordingProcess.once('close', (code) => {
+        console.log(`FFmpeg stopped with code: ${code}`);
+        activeRecordingProcess = null;
+        resolve({ success: true });
+      });
+
+      // Send SIGINT for clean stop (allows FFmpeg to finalize the file)
+      activeRecordingProcess.kill('SIGINT');
+
+      // Timeout in case process doesn't stop
+      setTimeout(() => {
+        if (activeRecordingProcess) {
+          console.log('FFmpeg did not stop gracefully, forcing kill...');
+          activeRecordingProcess.kill('SIGKILL');
+          activeRecordingProcess = null;
+        }
+        resolve({ success: true });
+      }, 5000);
+    } else {
+      console.log('No active recording process to stop');
+      resolve({ success: false, message: 'No active recording' });
+    }
+  });
 });
 
 // Generate video thumbnail

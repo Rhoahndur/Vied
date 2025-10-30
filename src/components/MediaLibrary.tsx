@@ -138,93 +138,87 @@ export function MediaLibrary({
     }
   };
 
-  // Webcam recording functionality
+  // Webcam recording functionality using FFmpeg (MediaRecorder is broken in Electron)
   const startWebcamRecording = async () => {
     try {
       setError(null);
       setRecordingMode('webcam');
 
-      if (window.electron.checkCameraPermission) {
-        const permissionStatus = await window.electron.checkCameraPermission();
-        console.log('Camera permission status:', permissionStatus);
+      // First, use getUserMedia to trigger the camera permission dialog
+      // For unsigned Electron apps, this is the only reliable way to show the system dialog
+      console.log('Requesting camera permission via getUserMedia...');
+      let permissionStream: MediaStream | null = null;
+      try {
+        // This will trigger the macOS permission dialog
+        permissionStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+        console.log('Camera permission granted via getUserMedia');
 
-        if (permissionStatus.platform === 'darwin' && !permissionStatus.hasPermission) {
-          console.log('Requesting camera permission...');
-          const permissionResult = await window.electron.requestCameraPermission();
-
-          if (!permissionResult.hasPermission) {
-            setError({
-              type: 'permission',
-              message: 'Camera permission denied',
-              details: 'Vied needs permission to access your camera. Click "Open Settings" to grant camera access in System Settings → Privacy & Security → Camera.'
-            });
-            return;
-          }
-        }
+        // Stop all tracks immediately - we just needed it to trigger permission
+        permissionStream.getTracks().forEach(track => {
+          track.stop();
+          console.log('Stopped track:', track.kind);
+        });
+        permissionStream = null;
+      } catch (permErr: any) {
+        console.error('getUserMedia failed:', permErr);
+        throw new Error('Camera permission denied. Please grant camera access in System Settings > Privacy & Security > Camera and restart Vied.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          facingMode: 'user'
-        } as any,
-        audio: true
+      // Get list of camera devices from FFmpeg
+      console.log('Getting camera devices from FFmpeg...');
+      const devices = await window.electron.getCameraDevices();
+      console.log('Available camera devices:', devices);
+
+      if (!devices || devices.length === 0) {
+        throw new Error('No camera devices found');
+      }
+
+      // Use the first camera (usually FaceTime HD Camera on Mac)
+      const cameraDevice = devices[0];
+      console.log('Using camera:', cameraDevice.name);
+
+      // Ask user where to save the recording
+      const outputPath = await window.electron.saveFile();
+      if (!outputPath) {
+        console.log('User cancelled save dialog');
+        return;
+      }
+
+      console.log('Starting FFmpeg recording to:', outputPath);
+
+      // Start FFmpeg recording
+      await window.electron.startFfmpegRecording({
+        deviceIndex: cameraDevice.index,
+        outputPath: outputPath
       });
 
-      streamRef.current = stream;
-      console.log('Got webcam stream');
-
-      const options = { mimeType: 'video/webm; codecs=vp9' };
-      const mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mediaRecorder;
-      recordedChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = handleRecordingStop;
-
-      mediaRecorder.start(1000);
+      console.log('FFmpeg recording started successfully');
       setIsRecording(true);
       setRecordingTime(0);
 
+      // Start timer
       timerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
 
+      // Store output path for later
+      (window as any).currentRecordingPath = outputPath;
+
     } catch (err: any) {
-      console.error('Error starting webcam recording:', err);
+      console.error('Error starting FFmpeg webcam recording:', err);
 
-      const errorMessage = err.message || '';
-      const errorName = err.name || '';
+      // Reset state on error
+      setIsRecording(false);
+      setRecordingMode(null);
 
-      if (errorMessage.includes('Permission denied') ||
-          errorMessage.includes('NotAllowedError') ||
-          errorName === 'NotAllowedError') {
-        setError({
-          type: 'permission',
-          message: 'Camera permission denied',
-          details: 'Vied needs permission to access your camera. Click "Open Settings" to grant camera access in System Settings → Privacy & Security → Camera.'
-        });
-      } else if (errorMessage.includes('NotFoundError') ||
-                 errorMessage.includes('not found') ||
-                 errorName === 'NotFoundError') {
-        setError({
-          type: 'error',
-          message: 'No camera found',
-          details: 'Could not detect a camera. Please connect a webcam and try again.'
-        });
-      } else {
-        setError({
-          type: 'error',
-          message: 'Failed to start webcam',
-          details: err.message || 'Please try again.'
-        });
-      }
+      setError({
+        type: 'error',
+        message: 'Failed to start webcam recording',
+        details: err.message || 'FFmpeg could not access the camera. Make sure camera permissions are granted in System Settings.'
+      });
     }
   };
 
@@ -296,7 +290,12 @@ export function MediaLibrary({
       setShowSourcePicker(false);
 
       const screenStream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
+        audio: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: source.id
+          }
+        } as any,
         video: {
           mandatory: {
             chromeMediaSource: 'desktop',
@@ -313,24 +312,12 @@ export function MediaLibrary({
 
       // If in PiP mode, also get webcam stream and composite
       if (recordingMode === 'pip') {
-        // Check camera permission first
-        if (window.electron.checkCameraPermission) {
-          const permissionStatus = await window.electron.checkCameraPermission();
-          if (permissionStatus.platform === 'darwin' && !permissionStatus.hasPermission) {
-            const permissionResult = await window.electron.requestCameraPermission();
-            if (!permissionResult.hasPermission) {
-              setError({
-                type: 'permission',
-                message: 'Camera permission denied',
-                details: 'PiP mode needs camera access. Please grant permission and try again.'
-              });
-              screenStream.getTracks().forEach(track => track.stop());
-              return;
-            }
-          }
-        }
+        // Skip permission check for unsigned apps - getUserMedia will trigger the actual permission dialog
+        // if (window.electron.checkCameraPermission) {
+        //   ...
+        // }
 
-        // Get webcam stream
+        // Get webcam stream - this will trigger permission dialog if needed
         const webcamStream = await navigator.mediaDevices.getUserMedia({
           video: {
             width: { ideal: 320 },
@@ -457,7 +444,42 @@ export function MediaLibrary({
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
+    console.log('Stopping recording...');
+
+    // Stop timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    setIsRecording(false);
+
+    // For webcam recording using FFmpeg, stop the FFmpeg process
+    if (recordingMode === 'webcam') {
+      try {
+        console.log('Stopping FFmpeg recording...');
+        await window.electron.stopFfmpegRecording();
+        console.log('FFmpeg recording stopped');
+
+        // Get the output path we stored earlier
+        const outputPath = (window as any).currentRecordingPath;
+        if (outputPath && onRecordingComplete) {
+          console.log('Recording saved to:', outputPath);
+          onRecordingComplete(outputPath);
+        }
+      } catch (err: any) {
+        console.error('Error stopping FFmpeg recording:', err);
+        setError({
+          type: 'error',
+          message: 'Failed to stop recording',
+          details: err.message || 'Please try again.'
+        });
+      }
+      return;
+    }
+
+    // For screen recording (still uses MediaRecorder)
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       if (mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.requestData();
@@ -486,13 +508,6 @@ export function MediaLibrary({
     if (canvasRef.current) {
       canvasRef.current = null;
     }
-
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    setIsRecording(false);
   };
 
   const handleRecordingStop = async () => {
@@ -548,16 +563,8 @@ export function MediaLibrary({
     }
   };
 
-  // Update video preview when stream changes
-  useEffect(() => {
-    if (streamRef.current && videoPreviewRef.current && isRecording && recordingMode === 'webcam') {
-      console.log('Attaching stream to video preview element');
-      videoPreviewRef.current.srcObject = streamRef.current;
-      videoPreviewRef.current.play().catch(err => {
-        console.error('Error playing preview:', err);
-      });
-    }
-  }, [isRecording, recordingMode]);
+  // Note: Stream is now attached directly in startWebcamRecording before creating MediaRecorder
+  // This ensures the camera is active before we start recording
 
   // Cleanup on unmount
   useEffect(() => {
@@ -696,6 +703,8 @@ export function MediaLibrary({
                 onClick={startWebcamRecording}
                 className="w-full justify-start gap-2"
                 variant="outline"
+                disabled={true}
+                title="Requires code signing with Apple Developer certificate"
               >
                 <Camera className="h-4 w-4" />
                 Record Webcam
@@ -704,7 +713,8 @@ export function MediaLibrary({
                 onClick={startPiPRecording}
                 className="w-full justify-start gap-2"
                 variant="outline"
-                title="Record screen with webcam overlay (Picture-in-Picture)"
+                disabled={true}
+                title="Requires code signing with Apple Developer certificate"
               >
                 <Camera className="h-4 w-4" />
                 <Video className="h-4 w-4 -ml-3" />
@@ -793,48 +803,49 @@ export function MediaLibrary({
                   <div
                     key={file.path}
                     onClick={() => onSelectFile(file.path)}
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                    className={`p-2 rounded-lg border cursor-pointer transition-colors ${
                       isActive
                         ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
                         : 'border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5'
                     }`}
                     title={file.path}
                   >
-                    <div className="flex items-start gap-3">
+                    <div className="flex items-start gap-2">
                       <div className="flex-shrink-0">
                         {file.thumbnail ? (
                           <img
                             src={file.thumbnail}
                             alt={file.name}
-                            className="w-16 h-12 object-cover rounded border border-black/10 dark:border-white/10"
+                            className="w-14 h-10 object-cover rounded border border-black/10 dark:border-white/10"
                           />
                         ) : (
-                          <div className="w-16 h-12 flex items-center justify-center rounded bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10">
+                          <div className="w-14 h-10 flex items-center justify-center rounded bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10">
                             {isActive ? (
-                              <Video className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                              <Video className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                             ) : (
-                              <Video className="h-6 w-6 text-black/40 dark:text-white/40" />
+                              <Video className="h-5 w-5 text-black/40 dark:text-white/40" />
                             )}
                           </div>
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium text-black/80 dark:text-white/80 truncate">
+                        <div className="flex items-start gap-1.5 mb-0.5">
+                          <p className="text-[11px] font-medium text-black/80 dark:text-white/80 truncate flex-1">
                             {file.name}
                           </p>
                           {isActive && (
-                            <span className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex-shrink-0">
-                              Now Playing
+                            <span className="text-[9px] px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex-shrink-0 whitespace-nowrap">
+                              Playing
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-black/40 dark:text-white/40">
-                          <span>{formatDuration(file.duration)}</span>
-                          <span>•</span>
-                          <span>{formatFileSize(file.size)}</span>
-                          <span>•</span>
-                          <span>{formatTimestamp(file.timestamp)}</span>
+                        <div className="flex flex-col gap-0.5 text-[9px] text-black/40 dark:text-white/40">
+                          <div className="flex items-center gap-1">
+                            <span className="whitespace-nowrap">{formatDuration(file.duration)}</span>
+                            <span>•</span>
+                            <span className="whitespace-nowrap">{formatFileSize(file.size)}</span>
+                          </div>
+                          <div className="whitespace-nowrap">{formatTimestamp(file.timestamp)}</div>
                         </div>
                       </div>
                     </div>

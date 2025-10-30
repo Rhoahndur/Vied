@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { Download, Film, Eye } from "lucide-react";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -18,9 +18,11 @@ interface ToolbarProps {
   duration: number;
   clips: Clip[];
   disabled: boolean;
+  editorMode: boolean;
+  onToggleEditorMode: () => void;
 }
 
-export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabled }: ToolbarProps) {
+export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabled, editorMode, onToggleEditorMode }: ToolbarProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState("mp4");
 
@@ -49,6 +51,7 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
 
       let result;
 
+      // Advanced: Export multiple clips if they exist
       if (clips && clips.length > 0) {
         console.log('Exporting clips:', clips);
 
@@ -62,6 +65,7 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
           }))
         });
       } else {
+        // Simple trim export
         const trimDuration = endTime - startTime;
 
         console.log('Export params:', {
@@ -118,8 +122,42 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
         </div>
       )}
 
+      {!isDefaultTrim && videoPath && (
+        <>
+          <Separator orientation="vertical" className="h-6" />
+          <div className="flex items-center gap-2 text-sm text-black/60 dark:text-white/60">
+            <span>•</span>
+            <span>
+              Trim: {formatTime(startTime)} → {formatTime(endTime)} ({formatTime(trimDuration)})
+            </span>
+          </div>
+        </>
+      )}
+
+      <div className="flex-1" />
+
+      {/* Mode Toggle - QuickTime style */}
       {videoPath && (
         <>
+          <Button
+            size="sm"
+            variant={editorMode ? "default" : "outline"}
+            className="gap-2"
+            onClick={onToggleEditorMode}
+            title={editorMode ? "Switch to Viewer Mode" : "Switch to Editor Mode"}
+          >
+            {editorMode ? (
+              <>
+                <Film className="h-4 w-4" />
+                Editor
+              </>
+            ) : (
+              <>
+                <Eye className="h-4 w-4" />
+                Viewer
+              </>
+            )}
+          </Button>
           <Separator orientation="vertical" className="h-6" />
         </>
       )}
@@ -138,17 +176,6 @@ export function Toolbar({ videoPath, startTime, endTime, duration, clips, disabl
           </SelectContent>
         </Select>
       </div>
-
-      {!isDefaultTrim && videoPath && (
-        <div className="flex items-center gap-2 text-sm text-black/60 dark:text-white/60">
-          <span>•</span>
-          <span>
-            Trim: {formatTime(startTime)} → {formatTime(endTime)} ({formatTime(trimDuration)})
-          </span>
-        </div>
-      )}
-
-      <div className="flex-1" />
 
       {/* Export Button */}
       <Button

@@ -116,8 +116,15 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
     );
   }
 
+  const videoFileName = videoPath ? videoPath.split('/').pop() || 'Unknown' : '';
+
   return (
     <div className="flex flex-col h-full bg-black rounded-lg overflow-hidden">
+      {/* Video Name Header */}
+      <div className="bg-black/80 backdrop-blur-md px-4 py-2 border-b border-white/10">
+        <p className="text-white text-sm font-medium truncate">{videoFileName}</p>
+      </div>
+
       {/* Video Display Area */}
       <div className="flex-1 flex items-center justify-center relative">
         <video
@@ -142,7 +149,7 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
             </Button>
 
             <div
-              className="flex-1 h-1 bg-white/20 rounded-full overflow-hidden cursor-pointer"
+              className="flex-1 h-2 bg-white/20 rounded-full cursor-pointer relative"
               onClick={(e) => {
                 if (videoRef.current && duration > 0) {
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -154,8 +161,13 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
               }}
             >
               <div
-                className="h-full bg-blue-500 pointer-events-none"
+                className="absolute top-0 left-0 h-full bg-blue-500 rounded-full pointer-events-none"
                 style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+              />
+              {/* Playhead indicator */}
+              <div
+                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-blue-500 rounded-full border-2 border-white shadow-lg pointer-events-none"
+                style={{ left: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`, transform: 'translateX(-50%) translateY(-50%)' }}
               />
             </div>
 
