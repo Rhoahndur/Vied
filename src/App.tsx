@@ -182,13 +182,6 @@ export default function App() {
     }
   }, [currentTime, clips]);
 
-  // Auto-switch to viewer mode when no clips exist
-  useEffect(() => {
-    if (clips.length === 0 && editorMode) {
-      setEditorMode(false);
-    }
-  }, [clips, editorMode]);
-
   const handleSeekReady = (seekFunction: (time: number) => void) => {
     seekFunctionRef.current = seekFunction;
   };
