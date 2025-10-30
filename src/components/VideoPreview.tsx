@@ -1,4 +1,4 @@
-import { Play, Pause, Volume2, VolumeX } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize } from "lucide-react";
 import { Button } from "./ui/button";
 import { Slider } from "./ui/slider";
 import { useRef, useEffect, useState } from "react";
@@ -7,15 +7,22 @@ interface VideoPreviewProps {
   videoPath: string | null;
   onTimeUpdate?: (time: number) => void;
   onSeekReady?: (seekFunction: (time: number) => void) => void;
+  clipCount?: number;
 }
 
-export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPreviewProps) {
+export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount = 1 }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState([80]);
   const [isMuted, setIsMuted] = useState(false);
+  const [isDraggingTimeline, setIsDraggingTimeline] = useState(false);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [showControls, setShowControls] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const hideControlsTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Expose seek function to parent via callback
   useEffect(() => {
@@ -108,6 +115,94 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Handle timeline dragging
+  useEffect(() => {
+    if (!isDraggingTimeline) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const timelineEl = document.getElementById('video-timeline');
+      if (timelineEl && videoRef.current && duration > 0) {
+        const rect = timelineEl.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const percentage = Math.max(0, Math.min(1, mouseX / rect.width));
+        const seekTime = percentage * duration;
+        videoRef.current.currentTime = seekTime;
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingTimeline(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingTimeline, duration]);
+
+  // Auto-hide controls after inactivity (QuickTime style)
+  const resetHideControlsTimer = () => {
+    setShowControls(true);
+    if (hideControlsTimerRef.current) {
+      clearTimeout(hideControlsTimerRef.current);
+    }
+    hideControlsTimerRef.current = setTimeout(() => {
+      if (isPlaying) {
+        setShowControls(false);
+      }
+    }, 3000); // Hide after 3 seconds of inactivity
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hideControlsTimerRef.current) {
+        clearTimeout(hideControlsTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Show controls when video is paused
+  useEffect(() => {
+    if (!isPlaying) {
+      setShowControls(true);
+      if (hideControlsTimerRef.current) {
+        clearTimeout(hideControlsTimerRef.current);
+      }
+    } else {
+      resetHideControlsTimer();
+    }
+  }, [isPlaying]);
+
+  // Fullscreen functionality
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+
+    if (!isFullscreen) {
+      if (containerRef.current.requestFullscreen) {
+        containerRef.current.requestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  // Listen for fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
   if (!videoPath) {
     return (
       <div className="flex items-center justify-center h-full bg-black rounded-lg">
@@ -116,12 +211,20 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
     );
   }
 
-  const videoFileName = videoPath ? videoPath.split('/').pop() || 'Unknown' : '';
+  // Show "Untitled" when multiple clips exist, otherwise show filename
+  const videoFileName = clipCount > 1 ? 'Untitled' : (videoPath ? videoPath.split('/').pop() || 'Unknown' : '');
 
   return (
-    <div className="flex flex-col h-full bg-black rounded-lg overflow-hidden">
+    <div
+      ref={containerRef}
+      className="flex flex-col h-full bg-black rounded-lg overflow-hidden"
+      onMouseMove={resetHideControlsTimer}
+      style={{ cursor: showControls ? 'default' : 'none' }}
+    >
       {/* Video Name Header */}
-      <div className="bg-black/80 backdrop-blur-md px-4 py-2 border-b border-white/10">
+      <div
+        className={`bg-black/80 backdrop-blur-md px-4 py-2 border-b border-white/10 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0'}`}
+      >
         <p className="text-white text-sm font-medium truncate">{videoFileName}</p>
       </div>
 
@@ -137,7 +240,7 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
         />
 
         {/* Overlay Controls */}
-        <div className="absolute bottom-4 left-4 right-4 bg-black/60 backdrop-blur-md rounded-lg p-3 border border-white/10">
+        <div className={`absolute bottom-4 left-4 right-4 bg-black/60 backdrop-blur-md rounded-lg p-3 border border-white/10 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="flex items-center gap-3">
             <Button
               size="sm"
@@ -149,7 +252,8 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
             </Button>
 
             <div
-              className="flex-1 h-2 bg-white/20 rounded-full cursor-pointer relative"
+              id="video-timeline"
+              className="flex-1 h-3 bg-white/30 rounded-full cursor-pointer relative transition-all hover:h-4 hover:bg-white/40"
               onClick={(e) => {
                 if (videoRef.current && duration > 0) {
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -159,16 +263,57 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
                   videoRef.current.currentTime = Math.max(0, Math.min(duration, seekTime));
                 }
               }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsDraggingTimeline(true);
+              }}
+              onMouseMove={(e) => {
+                if (duration > 0) {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const mouseX = e.clientX - rect.left;
+                  const percentage = Math.max(0, Math.min(1, mouseX / rect.width));
+                  const time = percentage * duration;
+                  setHoverTime(time);
+                }
+              }}
+              onMouseLeave={() => {
+                setHoverTime(null);
+              }}
             >
               <div
-                className="absolute top-0 left-0 h-full bg-blue-500 rounded-full pointer-events-none"
+                className="absolute top-0 left-0 h-full bg-blue-500 rounded-full pointer-events-none transition-all"
                 style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
               />
-              {/* Playhead indicator */}
+              {/* Playhead indicator - rounded triangle pointing down */}
               <div
-                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-blue-500 rounded-full border-2 border-white shadow-lg pointer-events-none"
-                style={{ left: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`, transform: 'translateX(-50%) translateY(-50%)' }}
-              />
+                className="absolute top-1/2 -translate-y-1/2 transition-all hover:scale-110"
+                style={{
+                  left: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
+                  transform: 'translateX(-50%) translateY(-50%)',
+                  cursor: isDraggingTimeline ? 'grabbing' : 'grab'
+                }}
+              >
+                <div
+                  style={{
+                    width: 0,
+                    height: 0,
+                    borderLeft: '8px solid transparent',
+                    borderRight: '8px solid transparent',
+                    borderTop: '12px solid #3b82f6',
+                    filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))',
+                    borderRadius: '2px'
+                  }}
+                />
+              </div>
+              {/* Hover time tooltip - aligned with playhead height */}
+              {hoverTime !== null && !isDraggingTimeline && (
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 bg-black/90 text-white text-xs px-2 py-1 rounded pointer-events-none whitespace-nowrap"
+                  style={{ left: `${(hoverTime / duration) * 100}%`, transform: 'translateX(-50%) translateY(-50%)', marginLeft: '20px' }}
+                >
+                  {formatTime(hoverTime)}
+                </div>
+              )}
             </div>
 
             <span className="text-white text-sm tabular-nums">{formatTime(currentTime)} / {formatTime(duration)}</span>
@@ -194,6 +339,17 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady }: VideoPrev
                 className="w-20"
               />
             </div>
+
+            {/* Fullscreen button */}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 w-8 p-0 text-white hover:bg-white/20"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            >
+              {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+            </Button>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { Film, ZoomIn, ZoomOut, X } from "lucide-react";
-import { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { Slider } from "./ui/slider";
 import { Button } from "./ui/button";
 
@@ -26,6 +26,7 @@ interface TimelineProps {
   onReorderClips?: (draggedClipId: number, targetClipId: number) => void;
   onDeleteClip?: (clipId: number) => void;
   onUpdateClip?: (clipId: number, updates: { startTime?: number; endTime?: number }) => void;
+  onDropVideoFile?: (filePath: string, insertIndex: number) => void;
 }
 
 export function Timeline({
@@ -42,7 +43,8 @@ export function Timeline({
   onSelectClip,
   onReorderClips,
   onDeleteClip,
-  onUpdateClip
+  onUpdateClip,
+  onDropVideoFile
 }: TimelineProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
@@ -52,6 +54,7 @@ export function Timeline({
   const [dragOverClipId, setDragOverClipId] = useState<number | null>(null);
   const [resizingClip, setResizingClip] = useState<{ clipId: number; edge: 'left' | 'right' } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = 100%, 2 = 200%, etc.
+  const [externalFileDropIndex, setExternalFileDropIndex] = useState<number | null>(null);
 
   const handleTimelineClick = (e: React.MouseEvent) => {
     if (e.target instanceof Element && e.target.closest('.trim-marker')) return;
@@ -399,12 +402,90 @@ export function Timeline({
           </div>
 
           {/* Main Track Lane */}
-          <div className="absolute top-0 left-12 relative border-b-4" style={{
-            height: '100px',
-            width: `calc((100% - 3rem) * ${zoomLevel})`,
-            backgroundColor: duration > 0 ? '#1a472a' : '#2c2c2e',
-            borderColor: duration > 0 ? '#facc15' : '#ffffff33'
-          }}>
+          <div
+            className="absolute top-0 left-12 relative border-b-4"
+            style={{
+              height: '100px',
+              width: `calc((100% - 3rem) * ${zoomLevel})`,
+              backgroundColor: duration > 0 ? '#1a472a' : '#2c2c2e',
+              borderColor: duration > 0 ? '#facc15' : '#ffffff33'
+            }}
+            onDragOver={(e) => {
+              // Check if dragging external file (not an existing clip)
+              const types = e.dataTransfer.types;
+              if (types.includes('Files') && !draggedClipId) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'copy';
+
+                // Calculate which clip index to insert at based on cursor position
+                if (!clips || clips.length === 0) {
+                  setExternalFileDropIndex(0);
+                } else {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const mouseX = e.clientX - rect.left;
+                  const percentage = mouseX / rect.width;
+
+                  // Find the insertion point based on accumulated clip widths
+                  const mainClips = clips.filter(c => c.track === 'main');
+                  const totalClipsDuration = mainClips.reduce((sum, c) => sum + (c.endTime - c.startTime), 0);
+                  let accumulatedPercentage = 0;
+                  let insertIndex = mainClips.length;
+
+                  for (let i = 0; i < mainClips.length; i++) {
+                    const clipDuration = mainClips[i].endTime - mainClips[i].startTime;
+                    const clipPercentage = (clipDuration / totalClipsDuration);
+                    accumulatedPercentage += clipPercentage;
+
+                    if (percentage < accumulatedPercentage) {
+                      // Insert before this clip
+                      insertIndex = i;
+                      break;
+                    }
+                  }
+
+                  setExternalFileDropIndex(insertIndex);
+                }
+              }
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setExternalFileDropIndex(null);
+            }}
+            onDrop={async (e) => {
+              const types = e.dataTransfer.types;
+              if (types.includes('Files') && !draggedClipId && onDropVideoFile) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const files = Array.from(e.dataTransfer.files);
+                const validExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv'];
+
+                // Filter for video files only
+                const videoFiles = files.filter(file => {
+                  const fileName = file.name.toLowerCase();
+                  return validExtensions.some(ext => fileName.endsWith(ext));
+                });
+
+                if (videoFiles.length > 0 && externalFileDropIndex !== null) {
+                  // Process each video file sequentially
+                  for (let i = 0; i < videoFiles.length; i++) {
+                    const file = videoFiles[i];
+                    const filePath = (window as any).electron?.getPathForFile(file);
+
+                    if (filePath) {
+                      // Insert each file at the appropriate index
+                      // Each subsequent file goes after the previous one
+                      await onDropVideoFile(filePath, externalFileDropIndex + i);
+                    }
+                  }
+                }
+
+                setExternalFileDropIndex(null);
+              }
+            }}
+          >
             {/* Track label - only show when video is loaded */}
             {duration > 0 && (
               <div className="absolute top-2 left-4 text-white text-xl font-black z-50 bg-black/50 px-3 py-1 rounded">
@@ -461,10 +542,51 @@ export function Timeline({
                   accumulatedDuration += clipDuration;
 
                   return (
-                    <div
-                      key={clip.id}
-                      draggable={true}
-                      className={`timeline-clip absolute rounded-lg cursor-move transition-all ${
+                    <React.Fragment key={clip.id}>
+                      {/* Insertion indicator for external file drops */}
+                      {externalFileDropIndex === index && (
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none z-80"
+                          style={{
+                            left: `${clipStartPos}%`,
+                            width: '4px',
+                            backgroundColor: '#22c55e',
+                            boxShadow: '0 0 20px rgba(34, 197, 94, 0.8), 0 0 40px rgba(34, 197, 94, 0.5)',
+                          }}
+                        >
+                          {/* Green triangle indicator at top */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '-8px',
+                              left: '50%',
+                              transform: 'translateX(-50%)',
+                              width: 0,
+                              height: 0,
+                              borderLeft: '8px solid transparent',
+                              borderRight: '8px solid transparent',
+                              borderTop: '12px solid #22c55e',
+                              filter: 'drop-shadow(0 0 8px rgba(34, 197, 94, 0.8))'
+                            }}
+                          />
+                          {/* "Insert Here" label */}
+                          <div
+                            className="absolute bg-green-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap font-bold"
+                            style={{
+                              top: '50%',
+                              left: '8px',
+                              transform: 'translateY(-50%)',
+                              boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                            }}
+                          >
+                            Insert Here
+                          </div>
+                        </div>
+                      )}
+
+                      <div
+                        draggable={true}
+                        className={`timeline-clip absolute rounded-lg cursor-move transition-all ${
                         isSelected ? 'scale-105' : 'hover:scale-102'
                       } ${isDraggedOver ? 'scale-105' : ''} ${isBeingDragged ? 'opacity-40' : ''}`}
                       style={{
@@ -607,13 +729,20 @@ export function Timeline({
                             title="◀ Drag to trim IN point"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
                               left: '15px',
                               backgroundColor: '#9ca3af',
                               boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
-                            }}>
-                              <span className="text-black text-xs font-black">IN</span>
-                            </div>
+                            }} />
+                            {/* Time label - only show when resizing this edge */}
+                            {resizingClip?.clipId === clip.id && resizingClip?.edge === 'left' && (
+                              <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
+                                left: '15px',
+                                backgroundColor: '#9ca3af'
+                              }}>
+                                {formatTime(clip.startTime)}
+                              </div>
+                            )}
                           </div>
                           {/* Right resize handle - OUT point - QuickTime style */}
                           <div
@@ -634,158 +763,64 @@ export function Timeline({
                             title="Drag to trim OUT point ▶"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
                               right: '15px',
                               backgroundColor: '#9ca3af',
                               boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
-                            }}>
-                              <span className="text-black text-xs font-black">OUT</span>
-                            </div>
+                            }} />
+                            {/* Time label - only show when resizing this edge */}
+                            {resizingClip?.clipId === clip.id && resizingClip?.edge === 'right' && (
+                              <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
+                                right: '15px',
+                                backgroundColor: '#9ca3af'
+                              }}>
+                                {formatTime(clip.endTime)}
+                              </div>
+                            )}
                           </div>
                         </>
                       )}
                     </div>
+                    </React.Fragment>
                   );
                 });
               })()}
 
-              {/* QuickTime-style trim interface - Only show when video is loaded but no clips exist */}
-              {duration > 0 && (!clips || clips.filter(c => c.track === 'main').length === 0) && (
-                <>
-                  {/* Full video bar (gray background) */}
+              {/* Insertion indicator at the end (for appending new clips) */}
+              {externalFileDropIndex !== null && clips && clips.filter(c => c.track === 'main').length > 0 && externalFileDropIndex >= clips.filter(c => c.track === 'main').length && (
+                <div
+                  className="absolute top-0 bottom-0 pointer-events-none z-80"
+                  style={{
+                    right: '0%',
+                    width: '4px',
+                    backgroundColor: '#22c55e',
+                    boxShadow: '0 0 20px rgba(34, 197, 94, 0.8), 0 0 40px rgba(34, 197, 94, 0.5)',
+                  }}
+                >
                   <div
-                    className="absolute rounded"
                     style={{
-                      left: '0%',
-                      width: '100%',
-                      top: '35px',
-                      bottom: '35px',
-                      backgroundColor: '#6b7280',
-                      border: '2px solid #9ca3af',
-                      zIndex: 50
+                      position: 'absolute',
+                      top: '-8px',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      width: 0,
+                      height: 0,
+                      borderLeft: '8px solid transparent',
+                      borderRight: '8px solid transparent',
+                      borderTop: '12px solid #22c55e',
+                      filter: 'drop-shadow(0 0 8px rgba(34, 197, 94, 0.8))'
                     }}
-                    title={`Full Video: ${formatTime(duration)}`}
                   />
-
-                  {/* Dimmed region BEFORE trim (discarded) */}
-                  {startTime > 0 && (
-                    <div
-                      className="absolute rounded-l"
-                      style={{
-                        left: '0%',
-                        width: `${startPosition}%`,
-                        top: '35px',
-                        bottom: '35px',
-                        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                        border: '2px solid rgba(0, 0, 0, 0.4)',
-                        zIndex: 55
-                      }}
-                    />
-                  )}
-
-                  {/* Dimmed region AFTER trim (discarded) */}
-                  {endTime < duration && (
-                    <div
-                      className="absolute rounded-r"
-                      style={{
-                        left: `${endPosition}%`,
-                        width: `${100 - endPosition}%`,
-                        top: '35px',
-                        bottom: '35px',
-                        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                        border: '2px solid rgba(0, 0, 0, 0.4)',
-                        zIndex: 55
-                      }}
-                    />
-                  )}
-
-                  {/* Gray trim region (what will be kept) */}
                   <div
-                    className="absolute pointer-events-none"
+                    className="absolute bg-green-500 text-white text-xs px-2 py-1 rounded whitespace-nowrap font-bold"
                     style={{
-                      left: `${startPosition}%`,
-                      width: `${trimWidth}%`,
-                      top: '35px',
-                      bottom: '35px',
-                      backgroundColor: 'transparent',
-                      border: '4px solid #9ca3af',
-                      boxShadow: '0 0 20px rgba(156, 163, 175, 0.6), inset 0 0 30px rgba(156, 163, 175, 0.2)',
-                      zIndex: 60
+                      top: '50%',
+                      left: '8px',
+                      transform: 'translateY(-50%)',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
                     }}
-                    title={`Trimmed Selection: ${formatTime(startTime)} - ${formatTime(endTime)} (${formatTime(endTime - startTime)})`}
                   >
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 pointer-events-none">
-                      <span className="text-sm font-bold text-white bg-black/80 px-3 py-1 rounded shadow-lg">
-                        {formatTime(endTime - startTime)}
-                      </span>
-                    </div>
-                  </div>
-                </>
-              )}
-
-
-              {/* Start marker (IN point) - QuickTime style - ONLY show when no clips exist */}
-              {(!clips || clips.filter(c => c.track === 'main').length === 0) && (
-                <div
-                  className="absolute top-0 bottom-0 cursor-ew-resize trim-marker"
-                  style={{
-                    left: `${startPosition}%`,
-                    width: '6px',
-                    background: 'linear-gradient(to right, #9ca3af, #6b7280)',
-                    boxShadow: '0 0 15px rgba(156, 163, 175, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
-                    borderRadius: '3px',
-                    zIndex: dragging === 'start' ? 1000 : 900
-                  }}
-                  onMouseDown={(e) => handleMarkerMouseDown('start', e)}
-                  title="◀ Drag to set IN point"
-                >
-                  {/* Top handle - solid gray, stays within bounds */}
-                  <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
-                    left: '15px',
-                    backgroundColor: '#9ca3af',
-                    boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
-                  }}>
-                    <span className="text-black text-xs font-black">IN</span>
-                  </div>
-                  {/* Time label */}
-                  <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
-                    left: '15px',
-                    backgroundColor: '#9ca3af'
-                  }}>
-                    {formatTime(startTime)}
-                  </div>
-                </div>
-              )}
-
-              {/* End marker (OUT point) - QuickTime style - ONLY show when no clips exist */}
-              {(!clips || clips.filter(c => c.track === 'main').length === 0) && (
-                <div
-                  className="absolute top-0 bottom-0 cursor-ew-resize trim-marker"
-                  style={{
-                    left: `${endPosition}%`,
-                    width: '6px',
-                    background: 'linear-gradient(to right, #9ca3af, #6b7280)',
-                    boxShadow: '0 0 15px rgba(156, 163, 175, 0.8), inset 0 0 8px rgba(255,255,255,0.4)',
-                    borderRadius: '3px',
-                    zIndex: dragging === 'end' ? 1000 : 900
-                  }}
-                  onMouseDown={(e) => handleMarkerMouseDown('end', e)}
-                  title="Drag to set OUT point ▶"
-                >
-                  {/* Top handle - solid gray, stays within bounds */}
-                  <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
-                    right: '15px',
-                    backgroundColor: '#9ca3af',
-                    boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
-                  }}>
-                    <span className="text-black text-xs font-black">OUT</span>
-                  </div>
-                  {/* Time label */}
-                  <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
-                    right: '15px',
-                    backgroundColor: '#9ca3af'
-                  }}>
-                    {formatTime(endTime)}
+                    Append Here
                   </div>
                 </div>
               )}
@@ -1016,13 +1051,20 @@ export function Timeline({
                             title="◀ Drag to trim IN point"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
                               left: '15px',
                               backgroundColor: '#9ca3af',
                               boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
-                            }}>
-                              <span className="text-black text-xs font-black">IN</span>
-                            </div>
+                            }} />
+                            {/* Time label - only show when resizing this edge */}
+                            {resizingClip?.clipId === clip.id && resizingClip?.edge === 'left' && (
+                              <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
+                                left: '15px',
+                                backgroundColor: '#9ca3af'
+                              }}>
+                                {formatTime(clip.startTime)}
+                              </div>
+                            )}
                           </div>
                           {/* Right resize handle - OUT point - QuickTime style */}
                           <div
@@ -1043,13 +1085,20 @@ export function Timeline({
                             title="Drag to trim OUT point ▶"
                           >
                             {/* Circular handle - solid gray, stays within bounds */}
-                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl flex items-center justify-center" style={{
+                            <div className="absolute -top-3 w-10 h-10 border-2 border-white rounded-full shadow-xl" style={{
                               right: '15px',
                               backgroundColor: '#9ca3af',
                               boxShadow: '0 0 20px rgba(156, 163, 175, 0.9)'
-                            }}>
-                              <span className="text-black text-xs font-black">OUT</span>
-                            </div>
+                            }} />
+                            {/* Time label - only show when resizing this edge */}
+                            {resizingClip?.clipId === clip.id && resizingClip?.edge === 'right' && (
+                              <div className="absolute top-10 px-2 py-1 text-black text-xs font-bold rounded shadow-lg whitespace-nowrap" style={{
+                                right: '15px',
+                                backgroundColor: '#9ca3af'
+                              }}>
+                                {formatTime(clip.endTime)}
+                              </div>
+                            )}
                           </div>
                         </>
                       )}

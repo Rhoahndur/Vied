@@ -144,8 +144,17 @@ export default function App() {
       setStartTime(0);
       setEndTime(dur);
 
-      setClips([]);
-      setSelectedClipId(null);
+      // Create a clip immediately for the imported video (full duration)
+      const newClip: Clip = {
+        id: Date.now(),
+        startTime: 0,
+        endTime: dur,
+        videoPath: data.path,
+        track: 'main'
+      };
+
+      setClips([newClip]);
+      setSelectedClipId(newClip.id);
 
       addToRecentFiles(data.path, data.metadata);
     } else {
@@ -173,6 +182,13 @@ export default function App() {
     }
   }, [currentTime, clips]);
 
+  // Auto-switch to viewer mode when no clips exist
+  useEffect(() => {
+    if (clips.length === 0 && editorMode) {
+      setEditorMode(false);
+    }
+  }, [clips, editorMode]);
+
   const handleSeekReady = (seekFunction: (time: number) => void) => {
     seekFunctionRef.current = seekFunction;
   };
@@ -199,76 +215,47 @@ export default function App() {
   };
 
   const handleSplitClip = () => {
-    if (!videoPath) return;
+    if (!videoPath || clips.length === 0) return;
 
-    // If no clips exist, split the main video between startTime and endTime
-    if (clips.length === 0) {
-      if (currentTime <= startTime || currentTime >= endTime) {
-        return;
-      }
-
-      const newClips: Clip[] = [
-        {
-          id: Date.now(),
-          startTime: startTime,
-          endTime: currentTime,
-          videoPath: videoPath,
-          track: 'main'
-        },
-        {
-          id: Date.now() + 1,
-          startTime: currentTime,
-          endTime: endTime,
-          videoPath: videoPath,
-          track: 'main'
-        }
-      ];
-
-      setClips(newClips);
-      setSelectedClipId(newClips[0].id);
-      setStartTime(newClips[0].startTime);
-      setEndTime(newClips[0].endTime);
-    } else {
-      // If clips exist, split the selected clip
-      const selectedClip = clips.find(c => c.id === selectedClipId);
-      if (!selectedClip) {
-        console.log('No clip selected for splitting');
-        return;
-      }
-
-      // Check if playhead is within the selected clip's bounds
-      if (currentTime <= selectedClip.startTime || currentTime >= selectedClip.endTime) {
-        console.log('Playhead not within selected clip bounds');
-        return;
-      }
-
-      const newClips: Clip[] = [
-        {
-          id: Date.now(),
-          startTime: selectedClip.startTime,
-          endTime: currentTime,
-          videoPath: videoPath,
-          track: selectedClip.track
-        },
-        {
-          id: Date.now() + 1,
-          startTime: currentTime,
-          endTime: selectedClip.endTime,
-          videoPath: videoPath,
-          track: selectedClip.track
-        }
-      ];
-
-      // Replace the selected clip with the two new clips
-      const clipIndex = clips.findIndex(c => c.id === selectedClipId);
-      const newClipsList = [...clips];
-      newClipsList.splice(clipIndex, 1, ...newClips);
-
-      setClips(newClipsList);
-      setSelectedClipId(newClips[0].id);
-      setStartTime(newClips[0].startTime);
-      setEndTime(newClips[0].endTime);
+    // Split the selected clip at the playhead position
+    const selectedClip = clips.find(c => c.id === selectedClipId);
+    if (!selectedClip) {
+      console.log('No clip selected for splitting');
+      return;
     }
+
+    // Check if playhead is within the selected clip's bounds
+    if (currentTime <= selectedClip.startTime || currentTime >= selectedClip.endTime) {
+      console.log('Playhead not within selected clip bounds');
+      return;
+    }
+
+    const newClips: Clip[] = [
+      {
+        id: Date.now(),
+        startTime: selectedClip.startTime,
+        endTime: currentTime,
+        videoPath: selectedClip.videoPath,
+        track: selectedClip.track
+      },
+      {
+        id: Date.now() + 1,
+        startTime: currentTime,
+        endTime: selectedClip.endTime,
+        videoPath: selectedClip.videoPath,
+        track: selectedClip.track
+      }
+    ];
+
+    // Replace the selected clip with the two new clips
+    const clipIndex = clips.findIndex(c => c.id === selectedClipId);
+    const newClipsList = [...clips];
+    newClipsList.splice(clipIndex, 1, ...newClips);
+
+    setClips(newClipsList);
+    setSelectedClipId(newClips[0].id);
+    setStartTime(newClips[0].startTime);
+    setEndTime(newClips[0].endTime);
   };
 
   const handleSelectClip = (clipId: number) => {
@@ -316,6 +303,66 @@ export default function App() {
           : clip
       )
     );
+  };
+
+  const handleDropVideoFile = async (filePath: string, insertIndex: number) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      // Get metadata for the dropped video
+      const metadata = await window.electron.getVideoMetadata(filePath);
+      if (!metadata) {
+        setError('Failed to load video metadata');
+        return;
+      }
+
+      // Create a new clip with placeholder times (they're sequential in rendering)
+      const newClip: Clip = {
+        id: Date.now(),
+        startTime: 0, // Will be recalculated based on position
+        endTime: metadata.duration,
+        videoPath: filePath,
+        track: 'main'
+      };
+
+      // Insert the clip at the specified index
+      const newClips = [...clips];
+      newClips.splice(insertIndex, 0, newClip);
+
+      // Recalculate start/end times for all clips to be sequential
+      let accumulatedTime = 0;
+      const updatedClips = newClips.map(clip => {
+        const clipDuration = clip.endTime - clip.startTime;
+        const updatedClip = {
+          ...clip,
+          startTime: accumulatedTime,
+          endTime: accumulatedTime + clipDuration
+        };
+        accumulatedTime += clipDuration;
+        return updatedClip;
+      });
+
+      setClips(updatedClips);
+
+      // Update the overall duration to total of all clips
+      setDuration(accumulatedTime);
+
+      // Select the newly added clip (from the updated clips, not the original)
+      const updatedNewClip = updatedClips.find(c => c.id === newClip.id);
+      if (updatedNewClip) {
+        setSelectedClipId(updatedNewClip.id);
+        setStartTime(updatedNewClip.startTime);
+        setEndTime(updatedNewClip.endTime);
+      }
+
+      console.log('Inserted video as clip at index', insertIndex, 'Total clips:', updatedClips.length);
+    } catch (error: any) {
+      console.error('Error processing dropped file:', error);
+      setError(error.message || 'Failed to load video file');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const loadVideoFile = async (filePath: string) => {
@@ -385,6 +432,14 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
+
+    // If a video is already loaded and user is dragging a file, auto-switch to editor mode
+    if (videoPath && !editorMode) {
+      const types = e.dataTransfer.types;
+      if (types.includes('Files')) {
+        setEditorMode(true);
+      }
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -402,6 +457,12 @@ export default function App() {
     if (files.length === 0) return;
 
     const file = files[0];
+
+    // Only handle drops at app level if no video is loaded yet
+    // If video is already loaded, drops are handled by the Timeline component
+    if (videoPath) {
+      return;
+    }
 
     try {
       const filePath = window.electron.getPathForFile(file);
@@ -504,6 +565,7 @@ export default function App() {
                     videoPath={videoPath}
                     onTimeUpdate={handleTimeUpdate}
                     onSeekReady={handleSeekReady}
+                    clipCount={clips.length}
                   />
                 </div>
               </ResizablePanel>
@@ -525,6 +587,7 @@ export default function App() {
                   onReorderClips={handleReorderClips}
                   onDeleteClip={handleDeleteClip}
                   onUpdateClip={handleUpdateClip}
+                  onDropVideoFile={handleDropVideoFile}
                 />
               </ResizablePanel>
             </ResizablePanelGroup>
