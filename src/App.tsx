@@ -73,6 +73,7 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [editorMode, setEditorMode] = useState(false); // QuickTime-style: false = viewer, true = editor
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null); // Webcam stream for live preview
   const seekFunctionRef = useRef<((time: number) => void) | null>(null);
   const nextClipIdRef = useRef(1); // Counter for unique clip IDs
 
@@ -609,6 +610,7 @@ export default function App() {
               recentFiles={recentFiles}
               onSelectFile={handleLoadRecentFile}
               currentVideoPath={videoPath}
+              onWebcamStreamChange={setWebcamStream}
             />
           </ResizablePanel>
 
@@ -624,6 +626,7 @@ export default function App() {
                     onSeekReady={handleSeekReady}
                     clipCount={clips.length}
                     clips={clips}
+                    webcamStream={webcamStream}
                   />
                 </div>
               </ResizablePanel>

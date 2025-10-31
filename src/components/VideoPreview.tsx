@@ -17,9 +17,10 @@ interface VideoPreviewProps {
   onSeekReady?: (seekFunction: (time: number) => void) => void;
   clipCount?: number;
   clips?: Clip[];
+  webcamStream?: MediaStream | null;
 }
 
-export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount = 1, clips = [] }: VideoPreviewProps) {
+export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount = 1, clips = [], webcamStream }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -34,6 +35,51 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
   const [isFullscreen, setIsFullscreen] = useState(false);
   const hideControlsTimerRef = useRef<NodeJS.Timeout | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Handle webcam stream for live preview
+  useEffect(() => {
+    console.log('VideoPreview webcamStream useEffect triggered, webcamStream:', webcamStream);
+    console.log('videoRef.current exists:', !!videoRef.current);
+
+    if (videoRef.current && webcamStream) {
+      console.log('Setting webcam stream to VideoPreview');
+      console.log('Stream has tracks:', webcamStream.getTracks().length);
+      // Clear src attribute to avoid conflicts
+      videoRef.current.src = '';
+      videoRef.current.srcObject = webcamStream;
+      console.log('srcObject set, attempting to play...');
+      videoRef.current.play()
+        .then(() => console.log('Video playing successfully'))
+        .catch(err => console.error('Error playing video:', err));
+      setIsPlaying(true);
+    } else if (videoRef.current && !webcamStream && videoRef.current.srcObject) {
+      // Clear srcObject when webcam stream is removed
+      console.log('Clearing webcam stream from VideoPreview');
+      videoRef.current.srcObject = null;
+      setIsPlaying(false);
+    } else {
+      console.log('Conditions not met - videoRef:', !!videoRef.current, 'webcamStream:', !!webcamStream);
+    }
+  }, [webcamStream]);
+
+  // Calculate total timeline duration from clips
+  useEffect(() => {
+    if (clips.length > 0 && !webcamStream) {
+      // Total duration is the endTime of the last clip
+      const lastClip = clips[clips.length - 1];
+      const totalDuration = lastClip.endTime;
+      setDuration(totalDuration);
+      console.log('Total timeline duration from clips:', totalDuration);
+
+      // Load the first clip if not already loaded
+      const firstClip = clips[0];
+      if (firstClip.videoPath !== loadedVideoPath) {
+        setCurrentClipIndex(0);
+        setLoadedVideoPath(firstClip.videoPath);
+        setCurrentTime(0); // Start at beginning of timeline
+      }
+    }
+  }, [clips, webcamStream]);
 
   // Expose seek function to parent via callback
   useEffect(() => {
@@ -79,9 +125,9 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
     }
   }, [onSeekReady, clips, loadedVideoPath]);
 
-  // Update video source when videoPath changes
+  // Update video source when videoPath changes (but not when webcam is active)
   useEffect(() => {
-    if (videoRef.current && videoPath) {
+    if (videoRef.current && videoPath && !webcamStream) {
       const normalizedPath = videoPath.replace(/\\/g, '/');
       const mediaUrl = `vied-media://${normalizedPath}`;
       console.log('Loading video from:', mediaUrl);
@@ -90,7 +136,7 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
       setIsPlaying(false);
       setCurrentTime(0);
     }
-  }, [videoPath]);
+  }, [videoPath, webcamStream]);
 
   const handlePlayPause = () => {
     if (videoRef.current) {
@@ -106,12 +152,14 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       const videoTime = videoRef.current.currentTime;
-      setCurrentTime(videoTime);
 
       // Convert video time to timeline time if we have clips
       if (clips.length > 0 && currentClipIndex < clips.length) {
         const currentClip = clips[currentClipIndex];
         const timelineTime = currentClip.startTime + videoTime;
+
+        // Update currentTime to show timeline position, not video position
+        setCurrentTime(timelineTime);
 
         if (onTimeUpdate) {
           onTimeUpdate(timelineTime);
@@ -144,6 +192,7 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
         }
       } else {
         // No clips, use old behavior
+        setCurrentTime(videoTime);
         if (onTimeUpdate) {
           onTimeUpdate(videoTime);
         }
@@ -153,7 +202,11 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setDuration(videoRef.current.duration);
+      // Only set duration from video if we don't have clips
+      // When clips exist, duration is managed by the clips useEffect
+      if (clips.length === 0) {
+        setDuration(videoRef.current.duration);
+      }
     }
   };
 
@@ -207,8 +260,40 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
         const rect = timelineEl.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const percentage = Math.max(0, Math.min(1, mouseX / rect.width));
-        const seekTime = percentage * duration;
-        videoRef.current.currentTime = seekTime;
+        const timelineSeekTime = percentage * duration;
+
+        // If we have clips, use the clip-aware seek logic
+        if (clips.length > 0) {
+          const clipIndex = clips.findIndex(
+            clip => timelineSeekTime >= clip.startTime && timelineSeekTime < clip.endTime
+          );
+
+          if (clipIndex !== -1) {
+            const clip = clips[clipIndex];
+            const videoSeekTime = timelineSeekTime - clip.startTime;
+
+            // If we need to switch clips, load the new video
+            if (clip.videoPath !== loadedVideoPath) {
+              const normalizedPath = clip.videoPath.replace(/\\\\/g, '/');
+              const mediaUrl = `vied-media://${normalizedPath}`;
+              videoRef.current.src = mediaUrl;
+              videoRef.current.load();
+              setLoadedVideoPath(clip.videoPath);
+              setCurrentClipIndex(clipIndex);
+
+              videoRef.current.onloadedmetadata = () => {
+                if (videoRef.current) {
+                  videoRef.current.currentTime = videoSeekTime;
+                }
+              };
+            } else {
+              videoRef.current.currentTime = videoSeekTime;
+            }
+          }
+        } else {
+          // No clips, use old behavior
+          videoRef.current.currentTime = timelineSeekTime;
+        }
       }
     };
 
@@ -223,7 +308,7 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDraggingTimeline, duration]);
+  }, [isDraggingTimeline, duration, clips, loadedVideoPath]);
 
   // Auto-hide controls after inactivity (QuickTime style)
   const resetHideControlsTimer = () => {
@@ -285,7 +370,7 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
     };
   }, []);
 
-  if (!videoPath) {
+  if (!videoPath && !webcamStream) {
     return (
       <div className="flex items-center justify-center h-full bg-black rounded-lg">
         <p className="text-white/60">No video loaded. Click "Import Video" to get started.</p>
@@ -293,8 +378,10 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
     );
   }
 
-  // Show "Untitled" when multiple clips exist, otherwise show filename
-  const videoFileName = clipCount > 1 ? 'Untitled' : (videoPath ? videoPath.split('/').pop() || 'Unknown' : '');
+  // Show "Untitled" when multiple clips exist, "Camera" when webcam is active, otherwise show filename
+  const videoFileName = clipCount > 1 ? 'Untitled' :
+                        webcamStream ? 'Camera' :
+                        (videoPath ? videoPath.split('/').pop() || 'Unknown' : '');
 
   return (
     <div
@@ -341,8 +428,40 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
                   const rect = e.currentTarget.getBoundingClientRect();
                   const clickX = e.clientX - rect.left;
                   const percentage = clickX / rect.width;
-                  const seekTime = percentage * duration;
-                  videoRef.current.currentTime = Math.max(0, Math.min(duration, seekTime));
+                  const timelineSeekTime = percentage * duration;
+
+                  // If we have clips, use the clip-aware seek logic
+                  if (clips.length > 0) {
+                    const clipIndex = clips.findIndex(
+                      clip => timelineSeekTime >= clip.startTime && timelineSeekTime < clip.endTime
+                    );
+
+                    if (clipIndex !== -1) {
+                      const clip = clips[clipIndex];
+                      const videoSeekTime = timelineSeekTime - clip.startTime;
+
+                      // If we need to switch clips, load the new video
+                      if (clip.videoPath !== loadedVideoPath) {
+                        const normalizedPath = clip.videoPath.replace(/\\\\/g, '/');
+                        const mediaUrl = `vied-media://${normalizedPath}`;
+                        videoRef.current.src = mediaUrl;
+                        videoRef.current.load();
+                        setLoadedVideoPath(clip.videoPath);
+                        setCurrentClipIndex(clipIndex);
+
+                        videoRef.current.onloadedmetadata = () => {
+                          if (videoRef.current) {
+                            videoRef.current.currentTime = videoSeekTime;
+                          }
+                        };
+                      } else {
+                        videoRef.current.currentTime = videoSeekTime;
+                      }
+                    }
+                  } else {
+                    // No clips, use old behavior
+                    videoRef.current.currentTime = Math.max(0, Math.min(duration, timelineSeekTime));
+                  }
                 }
               }}
               onMouseDown={(e) => {
@@ -398,7 +517,9 @@ export function VideoPreview({ videoPath, onTimeUpdate, onSeekReady, clipCount =
               )}
             </div>
 
-            <span className="text-white text-sm tabular-nums">{formatTime(currentTime)} / {formatTime(duration)}</span>
+            <span className="text-white text-sm tabular-nums">
+              {webcamStream ? formatTime(currentTime) : `${formatTime(currentTime)} / ${formatTime(duration)}`}
+            </span>
 
             <div className="flex items-center gap-2">
               <Button

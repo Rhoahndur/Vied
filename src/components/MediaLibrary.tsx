@@ -27,6 +27,7 @@ interface MediaLibraryProps {
   recentFiles: RecentFile[];
   onSelectFile: (filePath: string) => void;
   currentVideoPath: string | null;
+  onWebcamStreamChange?: (stream: MediaStream | null) => void;
 }
 
 export function MediaLibrary({
@@ -34,7 +35,8 @@ export function MediaLibrary({
   onRecordingComplete,
   recentFiles,
   onSelectFile,
-  currentVideoPath
+  currentVideoPath,
+  onWebcamStreamChange
 }: MediaLibraryProps) {
   // Import state
   const [isLoading, setIsLoading] = useState(false);
@@ -138,37 +140,29 @@ export function MediaLibrary({
     }
   };
 
-  // Webcam recording functionality using FFmpeg (MediaRecorder is broken in Electron)
+  // Webcam recording functionality using FFmpeg (MediaRecorder doesn't work for webcam in Electron)
   const startWebcamRecording = async () => {
     try {
       setError(null);
       setRecordingMode('webcam');
 
-      // First, use getUserMedia to trigger the camera permission dialog
-      // For unsigned Electron apps, this is the only reliable way to show the system dialog
-      console.log('Requesting camera permission via getUserMedia...');
-      let permissionStream: MediaStream | null = null;
-      try {
-        // This will trigger the macOS permission dialog
-        permissionStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
-        });
-        console.log('Camera permission granted via getUserMedia');
+      console.log('Requesting camera access...');
 
-        // Stop all tracks immediately - we just needed it to trigger permission
-        permissionStream.getTracks().forEach(track => {
-          track.stop();
-          console.log('Stopped track:', track.kind);
-        });
-        permissionStream = null;
-      } catch (permErr: any) {
-        console.error('getUserMedia failed:', permErr);
-        throw new Error('Camera permission denied. Please grant camera access in System Settings > Privacy & Security > Camera and restart Vied.');
+      // First, trigger camera permission via getUserMedia
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+
+      console.log('Camera access granted');
+
+      // Attach stream to video preview for live preview
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.srcObject = permissionStream;
       }
+      webcamStreamRef.current = permissionStream;
 
-      // Get list of camera devices from FFmpeg
-      console.log('Getting camera devices from FFmpeg...');
+      // Get camera devices from FFmpeg
       const devices = await window.electron.getCameraDevices();
       console.log('Available camera devices:', devices);
 
@@ -176,14 +170,20 @@ export function MediaLibrary({
         throw new Error('No camera devices found');
       }
 
-      // Use the first camera (usually FaceTime HD Camera on Mac)
+      // Use the first camera
       const cameraDevice = devices[0];
       console.log('Using camera:', cameraDevice.name);
 
-      // Ask user where to save the recording
-      const outputPath = await window.electron.saveFile();
+      // Ask user where to save
+      const outputPath = await window.electron.saveFile('mp4');
       if (!outputPath) {
         console.log('User cancelled save dialog');
+        // Stop the preview stream
+        if (webcamStreamRef.current) {
+          webcamStreamRef.current.getTracks().forEach(track => track.stop());
+          webcamStreamRef.current = null;
+        }
+        setRecordingMode(null);
         return;
       }
 
@@ -195,7 +195,7 @@ export function MediaLibrary({
         outputPath: outputPath
       });
 
-      console.log('FFmpeg recording started successfully');
+      console.log('Webcam recording started');
       setIsRecording(true);
       setRecordingTime(0);
 
@@ -207,18 +207,49 @@ export function MediaLibrary({
       // Store output path for later
       (window as any).currentRecordingPath = outputPath;
 
+      // Pass the stream to parent for preview in main VideoPreview component
+      console.log('Calling onWebcamStreamChange with stream:', permissionStream);
+      console.log('Stream has video tracks:', permissionStream.getVideoTracks().length);
+      if (onWebcamStreamChange && permissionStream) {
+        onWebcamStreamChange(permissionStream);
+        console.log('onWebcamStreamChange called successfully');
+      } else {
+        console.error('onWebcamStreamChange not available or no stream');
+      }
+
     } catch (err: any) {
-      console.error('Error starting FFmpeg webcam recording:', err);
+      console.error('Error starting webcam recording:', err);
 
-      // Reset state on error
+      // Stop preview stream if it exists
+      if (webcamStreamRef.current) {
+        webcamStreamRef.current.getTracks().forEach(track => track.stop());
+        webcamStreamRef.current = null;
+      }
+
+      // Reset recording state on error, but keep recordingMode for permission dialog
       setIsRecording(false);
-      setRecordingMode(null);
 
-      setError({
-        type: 'error',
-        message: 'Failed to start webcam recording',
-        details: err.message || 'FFmpeg could not access the camera. Make sure camera permissions are granted in System Settings.'
-      });
+      const errorMessage = err.message || '';
+      const isPermissionError = errorMessage.includes('Permission denied') ||
+                                errorMessage.includes('NotAllowedError') ||
+                                err.name === 'NotAllowedError';
+
+      if (isPermissionError) {
+        // Keep recordingMode as 'webcam' so the "Open Settings" button opens Camera settings
+        setError({
+          type: 'permission',
+          message: 'Camera permission denied',
+          details: 'macOS blocked camera access. Click "Open Settings" below, then look for "Vied" (packaged app) in Privacy & Security → Camera and toggle it ON. After enabling, quit and restart Vied.'
+        });
+      } else {
+        // For non-permission errors, reset recordingMode
+        setRecordingMode(null);
+        setError({
+          type: 'error',
+          message: 'Failed to start webcam recording',
+          details: err.message || 'Could not access camera. Make sure camera permissions are granted and no other app is using the camera.'
+        });
+      }
     }
   };
 
@@ -455,12 +486,28 @@ export function MediaLibrary({
 
     setIsRecording(false);
 
-    // For webcam recording using FFmpeg, stop the FFmpeg process
+    // For webcam recording using FFmpeg
     if (recordingMode === 'webcam') {
       try {
-        console.log('Stopping FFmpeg recording...');
+        console.log('Stopping FFmpeg webcam recording...');
         await window.electron.stopFfmpegRecording();
         console.log('FFmpeg recording stopped');
+
+        // Stop the preview stream
+        if (webcamStreamRef.current) {
+          webcamStreamRef.current.getTracks().forEach(track => track.stop());
+          webcamStreamRef.current = null;
+        }
+
+        // Clear video preview
+        if (videoPreviewRef.current) {
+          videoPreviewRef.current.srcObject = null;
+        }
+
+        // Clear webcam stream from parent component
+        if (onWebcamStreamChange) {
+          onWebcamStreamChange(null);
+        }
 
         // Get the output path we stored earlier
         const outputPath = (window as any).currentRecordingPath;
@@ -479,7 +526,8 @@ export function MediaLibrary({
       return;
     }
 
-    // For screen recording (still uses MediaRecorder)
+    // For screen recording (uses MediaRecorder)
+    // Stop MediaRecorder if active
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       if (mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.requestData();
@@ -490,6 +538,7 @@ export function MediaLibrary({
     // Stop screen stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
 
     // Stop webcam stream (for PiP mode)
@@ -507,6 +556,11 @@ export function MediaLibrary({
     // Clear canvas reference
     if (canvasRef.current) {
       canvasRef.current = null;
+    }
+
+    // Clear video preview
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = null;
     }
   };
 
@@ -703,8 +757,6 @@ export function MediaLibrary({
                 onClick={startWebcamRecording}
                 className="w-full justify-start gap-2"
                 variant="outline"
-                disabled={true}
-                title="Requires code signing with Apple Developer certificate"
               >
                 <Camera className="h-4 w-4" />
                 Record Webcam
@@ -713,8 +765,6 @@ export function MediaLibrary({
                 onClick={startPiPRecording}
                 className="w-full justify-start gap-2"
                 variant="outline"
-                disabled={true}
-                title="Requires code signing with Apple Developer certificate"
               >
                 <Camera className="h-4 w-4" />
                 <Video className="h-4 w-4 -ml-3" />

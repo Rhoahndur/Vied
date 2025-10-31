@@ -5,7 +5,6 @@ module.exports = {
   packagerConfig: {
     asar: true,
     appBundleId: 'com.vied.app',
-    // Disable signing - entitlements don't work with unsigned apps anyway
     osxSign: false,
     extendInfo: {
       NSCameraUsageDescription: 'Vied needs access to your camera to record webcam videos.',
